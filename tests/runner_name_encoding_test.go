@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -216,30 +217,12 @@ func TestInvalidUTF8TestPathsCannotAliasValidReplacementPaths(t *testing.T) {
 	directory := t.TempDir()
 	bad := filepath.Join(directory, "test\xff.test.km")
 	good := filepath.Join(directory, "test�.test.km")
-	for _, path := range []string{bad, good} {
-		if err := os.WriteFile(path, nil, 0600); err != nil {
-			t.Fatal(err)
-		}
-	}
 	historyPath := filepath.Join(directory, "failures.json")
 	original := []byte(`{"version":1,"files":[]}`)
 	if err := os.WriteFile(historyPath, original, 0600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("KEIKA", filepath.Join(directory, "compiler-must-not-run"))
-	for _, reporter := range []string{"text", "json", "junit"} {
-		for _, path := range []string{bad, directory} {
-			status, output := captureRunner(t, []string{"--no-config", "--reporter", reporter, "--save-failures", historyPath, path})
-			after, err := os.ReadFile(historyPath)
-			if status != 2 || !strings.Contains(output, "test file paths must be valid UTF-8") || strings.Contains(output, "FILE ") || err != nil || string(after) != string(original) {
-				t.Fatalf("bad path reached execution or changed history: status=%d err=%v %s", status, err, output)
-			}
-		}
-	}
-	status, output := captureRunner(t, []string{"--no-config", "--list", "--include", "test�.test.km", directory})
-	if status != 0 || strings.TrimSpace(output) != good {
-		t.Fatalf("excluded invalid path blocked valid selection: status=%d %s", status, output)
-	}
 	if err := saveFailureHistory(historyPath, []FailedFile{{File: bad, WholeFile: true}}); err == nil || !strings.Contains(err.Error(), "file paths must be valid UTF-8") {
 		t.Fatalf("lossy relative path was saved: %v", err)
 	}
@@ -247,6 +230,29 @@ func TestInvalidUTF8TestPathsCannotAliasValidReplacementPaths(t *testing.T) {
 	if err != nil || string(after) != string(original) {
 		t.Fatalf("rejected save replaced earlier history: %v %s", err, after)
 	}
+	t.Run("filesystem paths", func(t *testing.T) {
+		for _, path := range []string{bad, good} {
+			if err := os.WriteFile(path, nil, 0600); err != nil {
+				if path == bad && errors.Is(err, syscall.EILSEQ) {
+					t.Skip("filesystem rejects invalid-UTF-8 filenames")
+				}
+				t.Fatal(err)
+			}
+		}
+		for _, reporter := range []string{"text", "json", "junit"} {
+			for _, path := range []string{bad, directory} {
+				status, output := captureRunner(t, []string{"--no-config", "--reporter", reporter, "--save-failures", historyPath, path})
+				after, err := os.ReadFile(historyPath)
+				if status != 2 || !strings.Contains(output, "test file paths must be valid UTF-8") || strings.Contains(output, "FILE ") || err != nil || string(after) != string(original) {
+					t.Fatalf("bad path reached execution or changed history: status=%d err=%v %s", status, err, output)
+				}
+			}
+		}
+		status, output := captureRunner(t, []string{"--no-config", "--list", "--include", "test�.test.km", directory})
+		if status != 0 || strings.TrimSpace(output) != good {
+			t.Fatalf("excluded invalid path blocked valid selection: status=%d %s", status, output)
+		}
+	})
 }
 
 func TestNameEncodingRealKinmokusei(t *testing.T) {
