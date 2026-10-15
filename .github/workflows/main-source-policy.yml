@@ -1,45 +1,80 @@
-name: Main pull request policy
+name: Verify publication checks
 
 on:
-  pull_request:
-    branches: [main]
   workflow_dispatch:
     inputs:
       pull_request:
-        description: Main pull request number to verify at this exact head
+        description: Open main pull request to verify
         required: true
         type: string
+      ci_run:
+        description: Successful complete CI run for the exact PR head
+        required: true
+        type: string
+      publish:
+        description: Register the verified results as commit statuses
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+  actions: read
   pull-requests: read
+  statuses: write
 
 jobs:
-  require-approved-source:
-    name: Require approved main source
+  verify:
+    name: Verify exact publication results
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Verify pull request source
+      - name: Verify CI, current source and merge contents
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pull_request }}
+          PR_NUMBER: ${{ inputs.pull_request }}
+          CI_RUN: ${{ inputs.ci_run }}
+          PUBLISH: ${{ inputs.publish }}
         run: |
           set -eu
-          case "$PR_NUMBER" in
-            ''|*[!0-9]*) echo "::error::A pull request number is required."; exit 1 ;;
+          case "$PR_NUMBER:$CI_RUN" in
+            *[!0-9:]*|:*|*:) echo "::error::Numeric PR and CI run identifiers are required."; exit 1 ;;
           esac
-          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" > "$RUNNER_TEMP/pull-request.json"
-          pr_file="$RUNNER_TEMP/pull-request.json"
-          test "$(jq -r .state "$pr_file")" = open
-          test "$(jq -r .base.ref "$pr_file")" = main
-          test "$(jq -r .head.repo.full_name "$pr_file")" = "$GITHUB_REPOSITORY"
-          head_ref=$(jq -r .head.ref "$pr_file")
-          case "$head_ref" in
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" > "$RUNNER_TEMP/pr.json"
+          pr="$RUNNER_TEMP/pr.json"
+          test "$(jq -r .state "$pr")" = open
+          test "$(jq -r .base.ref "$pr")" = main
+          test "$(jq -r .head.repo.full_name "$pr")" = "$GITHUB_REPOSITORY"
+          source=$(jq -r .head.ref "$pr")
+          case "$source" in
             devel|hotfix/*) ;;
-            *) echo "::error::Pull requests to main must come from devel or hotfix/*."; exit 1 ;;
+            *) echo "::error::The PR source is not approved for main."; exit 1 ;;
           esac
-          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
-            test "$head_ref" = "$GITHUB_REF_NAME"
-            test "$(jq -r .head.sha "$pr_file")" = "$GITHUB_SHA"
+          head_sha=$(jq -r .head.sha "$pr")
+          base_sha=$(jq -r .base.sha "$pr")
+          gh api "repos/$GITHUB_REPOSITORY/compare/$base_sha...$head_sha" > "$RUNNER_TEMP/compare.json"
+          jq -e '.status == "ahead" or .status == "identical"' "$RUNNER_TEMP/compare.json" >/dev/null
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN" > "$RUNNER_TEMP/ci.json"
+          ci="$RUNNER_TEMP/ci.json"
+          test "$(jq -r .status "$ci")" = completed
+          test "$(jq -r .conclusion "$ci")" = success
+          test "$(jq -r .head_sha "$ci")" = "$head_sha"
+          test "$(jq -r .head_branch "$ci")" = "$source"
+          test "$(jq -r '.path | split("@")[0]' "$ci")" = .github/workflows/ci.yml
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN/jobs?per_page=100" > "$RUNNER_TEMP/jobs.json"
+          for job in 'Tests on ubuntu-latest' 'Tests on macos-latest' 'Required compatibility'; do
+            jq -e --arg name "$job" '[.jobs[] | select(.name == $name)] | length == 1 and all(.[]; .status == "completed" and .conclusion == "success")' "$RUNNER_TEMP/jobs.json" >/dev/null
+          done
+          current_head=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq 'if .state == "open" then .head.sha else "closed" end')
+          test "$current_head" = "$head_sha"
+          echo "Verified PR #$PR_NUMBER at $head_sha against CI run $CI_RUN."
+          if [ "$PUBLISH" = true ]; then
+            ci_url=$(jq -r .html_url "$ci")
+            gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$head_sha" \
+              -f state=success -f context='Required compatibility' \
+              -f description='Verified full Linux/macOS CI for this exact PR head' \
+              -f "target_url=$ci_url" --jq '{context,state}'
+            gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$head_sha" \
+              -f state=success -f context='Require approved main source' \
+              -f description='Verified current main PR source and base ancestry' \
+              -f "target_url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq '{context,state}'
           fi
