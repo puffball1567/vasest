@@ -2326,6 +2326,12 @@ func TestFilePatternSelectionCombinesIncludesExcludesAndSingleFiles(t *testing.T
 func TestFilePatternConfigurationCLIOverridesAndShardOrder(t *testing.T) {
 	root := t.TempDir()
 	useWorkingDirectory(t, root)
+	// Getwd may resolve a temporary-directory alias, such as /var on macOS.
+	// Compare listed paths against the same working-directory spelling.
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range []string{"a.test.km", "nested/b.test.km", "nested/z_invalid.test.km", "skip/c.test.km"} {
 		writeWatchFile(t, filepath.Join("selected", filepath.FromSlash(name)), "fixture")
 	}
