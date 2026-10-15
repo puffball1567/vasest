@@ -1,0 +1,5 @@
+import { expectSlice, SliceExpectation } from "vasest";
+function main():void {
+  const values:int64[]=[int64(42)];
+  new SliceExpectation<int32>(values).toHaveElement(0,int32(42));
+}

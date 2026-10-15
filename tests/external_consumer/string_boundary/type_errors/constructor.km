@@ -1,0 +1,4 @@
+import { StringExpectation, NegatedStringExpectation, expectString } from "vasest";
+function main(): void {
+  new StringExpectation("value").toStartWith(42);
+}

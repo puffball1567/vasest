@@ -1,0 +1,44 @@
+import { Suite, TestContext, expectSlice, withTestLocation } from "vasest";
+import go fmt from "fmt";
+import go math from "math";
+import go os from "os";
+
+class Node {
+  public value: int;
+  public next: Node;
+  constructor(value: int) { this.value = value; this.next = nil; }
+}
+
+function main(): void {
+  const suite = new Suite("slice order failures");
+  suite.afterEach((): void => { fmt.Println("slice-in-order-afterEach"); });
+  suite.afterAll((): void => { fmt.Println("slice-in-order-afterAll"); });
+  suite.testWithContext("missing ordered elements", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("slice-in-order-cleanup"); });
+    if (os.Getenv("VASEST_SLICE_IN_ORDER_FIXED") == "1") {
+      expectSlice<int>([1, 2, 3]).toContainInOrder([1, 3]);
+      fmt.Println("slice-in-order-fixed");
+    } else {
+      expectSlice<int>([1, 2, 3]).toContainInOrder([3, 1]);
+    }
+  });
+  suite.test("negated ordered elements", (): void => { expectSlice<int>([1, 2, 3]).not.toContainInOrder([1, 3]); });
+  suite.test("missing repeated elements", (): void => { expectSlice<int>([1, 2, 1, 2]).toContainInOrder([1, 1, 1]); });
+  suite.test("negated empty order", (): void => { expectSlice<int>([1]).not.toContainInOrder([]); });
+  suite.test("NaN order", (): void => {
+    const values: float64[] = [math.NaN()];
+    expectSlice<float64>(values).toContainInOrder(values);
+  });
+  suite.test("cyclic order", (): void => {
+    const first = new Node(42);
+    const second = new Node(43);
+    first.next = first;
+    second.next = second;
+    expectSlice<Node>([first]).toContainInOrder([second]);
+  });
+  suite.test("explicit order location", (): void => {
+    withTestLocation("domain-check.km", 42, (): void => { expectSlice<int>([1, 2]).toContainInOrder([2, 1]); });
+  });
+  suite.test("later case", (): void => { fmt.Println("slice-in-order-failing-later"); });
+  suite.runAndExit();
+}

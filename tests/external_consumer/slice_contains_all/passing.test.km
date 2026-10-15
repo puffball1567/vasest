@@ -1,0 +1,86 @@
+import { Suite, SliceExpectation, expectSlice, expect } from "vasest";
+import go fmt from "fmt";
+import go math from "math";
+
+type UserID = distinct uint64;
+
+class Node {
+  public value: int;
+  public next: Node;
+  constructor(value: int) { this.value = value; this.next = nil; }
+}
+
+function main(): void {
+  const suite = new Suite("typed slice containment");
+  suite.test("native types multiplicities and extra elements", (): void => {
+    const large = UserID(18446744073709551615);
+    const actual: UserID[] = [large, UserID(42), large, UserID(43)];
+    const required: UserID[] = [UserID(42), large, large];
+    const matcher: SliceExpectation<UserID> = expectSlice<UserID>(actual);
+    matcher.toContainAll(required);
+    new SliceExpectation<UserID>(actual).toContainAll(required);
+    expectSlice(actual).not.toContainAll([large, large, large]);
+    const check: (expected: UserID[]) => void = matcher.toContainAll;
+    check(required);
+    expect(actual[0]).toEqual(large);
+    expect(required[0]).toEqual(UserID(42));
+  });
+  suite.test("empty requirements include nil and empty arrays", (): void => {
+    const missing: int[] = nil;
+    const empty: int[] = [];
+    const actual: int[] = [42];
+    expectSlice<int>(missing).toContainAll(empty);
+    expectSlice<int>(empty).toContainAll(missing);
+    expectSlice<int>(actual).toContainAll(empty);
+    new SliceExpectation<int>(actual).toContainAll(missing);
+    expectSlice<int>(missing).not.toContainAll(actual);
+    expectSlice<int>(empty).not.toContainAll(actual);
+  });
+  suite.test("native nested maps and arrays", (): void => {
+    const missing: int[] = nil;
+    const empty: int[] = [];
+    const actual: int[][] = [[1, 2], empty, missing, [1, 2], [42]];
+    const required: int[][] = [missing, [1, 2], [1, 2]];
+    expectSlice<int[]>(actual).toContainAll(required);
+    expectSlice<int[]>(actual).not.toContainAll([[2, 1]]);
+    const onlyNil: int[][] = [missing];
+    const onlyEmpty: int[][] = [empty];
+    expectSlice<int[]>(onlyNil).not.toContainAll(onlyEmpty);
+    const first: Map<string, int> = makeMap[string, int]();
+    const equal: Map<string, int> = makeMap[string, int]();
+    first["value"] = 42;
+    equal["value"] = 42;
+    const maps: Map<string, int>[] = [first, first];
+    const requiredMaps: Map<string, int>[] = [equal, equal];
+    expectSlice<Map<string, int>>(maps).toContainAll(requiredMaps);
+  });
+  suite.test("cyclic references keep native equality", (): void => {
+    const first = new Node(42);
+    const second = new Node(42);
+    first.next = first;
+    second.next = second;
+    const actual: Node[] = [nil, first, first];
+    const required: Node[] = [second, second];
+    expectSlice<Node>(actual).toContainAll(required);
+    second.value = 43;
+    expectSlice<Node>(actual).not.toContainAll(required);
+    expect(first.next).toBe(first);
+    expect(first.value).toEqual(42);
+  });
+  suite.test("saved matchers and native float semantics", (): void => {
+    const actual: int[] = [1, 2, 1, 42];
+    const required: int[] = [1, 1];
+    const matcher = expectSlice<int>(actual);
+    matcher.toContainAll(required);
+    actual[0] = 0;
+    matcher.not.toContainAll(required);
+    required[0] = 0;
+    matcher.toContainAll(required);
+    const floats: float64[] = [math.Copysign(0, -1), math.Inf(1), math.Inf(-1)];
+    expectSlice<float64>(floats).toContainAll([math.Inf(-1), float64(0)]);
+    const nans: float64[] = [math.NaN()];
+    expectSlice<float64>(nans).not.toContainAll(nans);
+  });
+  suite.test("later case", (): void => { fmt.Println("slice-containment-passing-later"); });
+  suite.runAndExit();
+}

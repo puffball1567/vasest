@@ -1,0 +1,52 @@
+import { Suite, TestContext, expectSlice, withTestLocation } from "vasest";
+import go fmt from "fmt";
+import go math from "math";
+import go os from "os";
+
+class Node {
+  public value: int;
+  public next: Node;
+  constructor(value: int) { this.value = value; this.next = nil; }
+}
+
+function main(): void {
+  const suite = new Suite("slice boundary failures");
+  suite.afterEach((): void => { fmt.Println("slice-boundary-afterEach"); });
+  suite.afterAll((): void => { fmt.Println("slice-boundary-afterAll"); });
+  suite.testWithContext("missing prefix", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("slice-boundary-cleanup"); });
+    expectSlice<int>([1, 2, 3]).toStartWith([2]);
+  });
+  suite.test("negated matching prefix", (): void => { expectSlice<int>([1, 2, 3]).not.toStartWith([1, 2]); });
+  suite.test("missing suffix", (): void => {
+    if (os.Getenv("VASEST_SLICE_BOUNDARY_FIXED") == "1") {
+      expectSlice<int>([1, 2, 3]).toEndWith([3]);
+      fmt.Println("slice-boundary-fixed-suffix");
+    } else {
+      expectSlice<int>([1, 2, 3]).toEndWith([2]);
+    }
+  });
+  suite.test("negated matching suffix", (): void => { expectSlice<int>([1, 2, 3]).not.toEndWith([2, 3]); });
+  suite.test("negated empty prefix", (): void => { expectSlice<int>([1]).not.toStartWith([]); });
+  suite.test("negated nil suffix", (): void => {
+    const missing: int[] = nil;
+    expectSlice<int>(missing).not.toEndWith(missing);
+  });
+  suite.test("nested order prefix", (): void => { expectSlice<int[]>([[1, 2]]).toStartWith([[2, 1]]); });
+  suite.test("NaN suffix", (): void => {
+    const values: float64[] = [math.NaN()];
+    expectSlice<float64>(values).toEndWith(values);
+  });
+  suite.test("cyclic prefix", (): void => {
+    const first = new Node(42);
+    const second = new Node(43);
+    first.next = first;
+    second.next = second;
+    expectSlice<Node>([first]).toStartWith([second]);
+  });
+  suite.test("explicit suffix location", (): void => {
+    withTestLocation("domain-check.km", 42, (): void => { expectSlice<int>([1, 2]).toEndWith([1]); });
+  });
+  suite.test("later case", (): void => { fmt.Println("slice-boundary-failing-later"); });
+  suite.runAndExit();
+}

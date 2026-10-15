@@ -1,0 +1,2 @@
+import { expectErrorValue } from "vasest";
+function main(): void { const predicate: (value: error) => boolean = (value: int): boolean => { return true; }; expectErrorValue(nil).toMatchTypeSatisfying<error>(predicate); }

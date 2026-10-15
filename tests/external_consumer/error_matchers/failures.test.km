@@ -1,0 +1,32 @@
+import { Suite, TestContext, expectErrorValue } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+import go os from "os";
+
+function main(): void {
+  const suite = new Suite("error matcher failures");
+  suite.afterEach((): void => { fmt.Println("error-matcher-afterEach"); });
+  suite.testWithContext("wrong cause", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("error-matcher-cleanup"); });
+    expectErrorValue(errors.New("same message")).toMatchCause(errors.New("same message"));
+  });
+  suite.test("negated cause", (): void => { expectErrorValue(nil).not.toMatchCause(nil); });
+  suite.test("wrong type", (): void => {
+    let found: *os.PathError = nil;
+    expectErrorValue(errors.New("ordinary error")).toMatchType<*os.PathError>(&found);
+  });
+  suite.test("negated type", (): void => { expectErrorValue(errors.New("actual")).not.toMatchType<error>(); });
+  suite.test("invalid target", (): void => {
+    let found = 0;
+    expectErrorValue(nil).toMatchType<int>(&found);
+  });
+  suite.test("nil target", (): void => {
+    let found: *error = nil;
+    expectErrorValue(nil).toMatchType<error>(found);
+  });
+  suite.test("invalid negated type", (): void => { expectErrorValue(nil).not.toMatchType<int>(); });
+  suite.test("error is non-nil", (): void => { expectErrorValue(errors.New("actual")).toBeNil(); });
+  suite.test("nil is no error", (): void => { expectErrorValue(nil).not.toBeNil(); });
+  suite.test("later case", (): void => { fmt.Println("error-matcher-later-case"); });
+  suite.runAndExit();
+}

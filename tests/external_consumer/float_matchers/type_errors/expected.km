@@ -1,0 +1,6 @@
+import { FloatExpectation, expectFloat } from "vasest";
+type Distance = distinct float32;
+function main(): void {
+  const expected: float64 = 1.0;
+  expectFloat<float32>(1.0).toBeCloseTo(expected, float32(0.1));
+}

@@ -1,0 +1,16 @@
+import { Suite, TestContext, expectErrorValue } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+import go reflect from "reflect";
+
+function main(): void {
+  const suite = new Suite("error type predicate panic");
+  suite.afterEach((): void => { fmt.Println("error-type-predicate-panic-afterEach"); });
+  suite.afterAll((): void => { fmt.Println("error-type-predicate-panic-afterAll"); });
+  suite.testWithContext("native predicate panic", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("error-type-predicate-panic-cleanup"); });
+    expectErrorValue(errors.New("body")).not.toMatchTypeSatisfying<error>((value: error): boolean => { reflect.ValueOf(42).Index(0); return false; });
+  });
+  suite.test("later", (): void => { fmt.Println("unreachable-predicate-panic-later"); });
+  suite.runAndExit();
+}

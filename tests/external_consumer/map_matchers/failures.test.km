@@ -1,0 +1,23 @@
+import { Suite, TestContext, expectMap } from "vasest";
+import go fmt from "fmt";
+
+function main(): void {
+  const suite = new Suite("map matcher failures");
+  const values: Map<string, int> = makeMap[string, int]();
+  values["present"] = 0;
+  suite.afterEach((): void => { fmt.Println("map-matcher-afterEach"); });
+  suite.testWithContext("missing key", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("map-matcher-cleanup"); });
+    expectMap<string, int>(values).toHaveKey("missing");
+  });
+  suite.test("negated key", (): void => { expectMap(values).not.toHaveKey("present"); });
+  suite.test("missing entry", (): void => { expectMap(values).toHaveEntry("missing", 0); });
+  suite.test("wrong value", (): void => { expectMap(values).toHaveEntry("present", 42); });
+  suite.test("negated entry", (): void => { expectMap(values).not.toHaveEntry("present", 0); });
+  suite.test("wrong length", (): void => { expectMap(values).toHaveLength(0); });
+  suite.test("negated length", (): void => { expectMap(values).not.toHaveLength(1); });
+  suite.test("invalid length", (): void => { expectMap(values).toHaveLength(-1); });
+  suite.test("invalid negated length", (): void => { expectMap(values).not.toHaveLength(-1); });
+  suite.test("later case", (): void => { fmt.Println("map-matcher-later-case"); });
+  suite.runAndExit();
+}

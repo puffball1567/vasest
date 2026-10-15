@@ -1,0 +1,8 @@
+import go os from "os";
+import go time from "time";
+
+function main(): void {
+  os.WriteFile(os.Getenv("VASEST_TIMEOUT_STARTED"), [1], 0600);
+  time.Sleep(2 * time.Second);
+  os.WriteFile(os.Getenv("VASEST_TIMEOUT_MARKER"), [1], 0600);
+}

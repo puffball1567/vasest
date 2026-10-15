@@ -1,0 +1,11 @@
+import { Suite, fail, runSuiteAndExit } from "vasest";
+import go fmt from "fmt";
+
+function main(): void {
+  runSuiteAndExit("xml & <suite>", (suite: Suite): void => {
+    suite.test("value \"quoted\"", (): void => {
+      fmt.Println("output <&> \"quoted\"");
+      fail("bad <&> \"quoted\"");
+    });
+  });
+}

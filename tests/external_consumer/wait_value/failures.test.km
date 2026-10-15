@@ -1,0 +1,37 @@
+import { Suite, TestContext, waitForValue, skipTest, expectFunction, withTestLocation } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+import go time from "time";
+
+function main(): void {
+  const suite = new Suite("waitForValue failures");
+  suite.afterEach((): void => { fmt.Println("wait-value-afterEach"); });
+  suite.testWithContext("false condition timeout", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("wait-value-cleanup"); });
+    waitForValue<int>((): int => { return 42; }, (value: int): boolean => { return false; }, 5 * time.Millisecond, time.Millisecond);
+  });
+  suite.test("read timeout", (): void => {
+    waitForValue<int>((): int => { throw errors.New("read is unavailable"); }, (value: int): boolean => { return true; }, 5 * time.Millisecond, time.Millisecond);
+  });
+  suite.test("explicit predicate timeout", (): void => {
+    waitForValue<int>((): int => { return 42; }, (value: int): boolean => {
+      withTestLocation("domain-check.km", 42, (): void => { throw errors.New("predicate is unavailable"); });
+      return true;
+    }, 5 * time.Millisecond, time.Millisecond);
+  });
+  suite.test("nil read", (): void => { waitForValue<int>(nil, (value: int): boolean => { return true; }, time.Second, time.Millisecond); });
+  suite.test("nil predicate", (): void => { waitForValue<int>((): int => { return 42; }, nil, time.Second, time.Millisecond); });
+  suite.test("invalid timeout", (): void => { waitForValue<int>((): int => { return 42; }, (value: int): boolean => { return true; }, 0, time.Millisecond); });
+  suite.test("invalid interval", (): void => { waitForValue<int>((): int => { return 42; }, (value: int): boolean => { return true; }, time.Second, -time.Millisecond); });
+  suite.test("joined skip remains a failure", (): void => {
+    const skipped = expectFunction((): void => { skipTest("joined skip"); }).toThrow();
+    const joined = errors.Join(skipped, errors.New("joined real failure"));
+    waitForValue<int>((): int => { throw joined; }, (value: int): boolean => { return true; }, 5 * time.Millisecond, time.Millisecond);
+  });
+  suite.testWithContext("skip cleanup failure", (context: TestContext): void => {
+    context.cleanup((): void => { withTestLocation("cleanup-check.km", 9, (): void => { throw errors.New("wait value cleanup failed"); }); });
+    waitForValue<int>((): int => { skipTest("cleanup resource unavailable"); return 42; }, (value: int): boolean => { return true; }, time.Second, time.Millisecond);
+  });
+  suite.test("later case", (): void => { fmt.Println("wait-value-failing-later"); });
+  suite.runAndExit();
+}

@@ -1,0 +1,4477 @@
+import go bytes from "bytes";
+import go cmp from "cmp";
+import go sha256 from "crypto/sha256";
+import go errors from "errors";
+import go json from "encoding/json";
+import go fmt from "fmt";
+import go io from "io";
+import go math from "math";
+import go rand from "math/rand";
+import go os from "os";
+import go filepath from "path/filepath";
+import go regexp from "regexp";
+import go reflect from "reflect";
+import go runtime from "runtime";
+import go strings from "strings";
+import go strconv from "strconv";
+import go sync from "sync";
+import go time from "time";
+import go utf8 from "unicode/utf8";
+
+export struct TestLocation {
+  public file: string;
+  public line: int;
+  public source: string;
+}
+
+struct RerunSuite {
+  public name: string;
+  public wholeSuite: boolean;
+  public cases: string[];
+}
+
+struct RerunSelection {
+  public all: boolean;
+  public suites: RerunSuite[];
+}
+
+// JSON syntax remains the decoder's responsibility. Check escapes before it can
+// replace an unpaired UTF-16 surrogate with a different, valid identifier.
+function hasUnpairedJSONSurrogate(text: string): boolean {
+  let inString = false;
+  for (let index = 0; index < len(text); index++) {
+    const character = text[index:index + 1];
+    if (character == "\"") {
+      inString = !inString;
+      continue;
+    }
+    if (!inString || character != "\\" || index + 1 >= len(text)) {
+      continue;
+    }
+    if (text[index + 1:index + 2] != "u") {
+      index++;
+      continue;
+    }
+    if (index + 6 > len(text)) {
+      return false;
+    }
+    const [unit, parseError] = strconv.ParseUint(text[index + 2:index + 6], 16, 16);
+    if (parseError != nil) {
+      return false;
+    }
+    if (unit >= 0xdc00 && unit <= 0xdfff) {
+      return true;
+    }
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      if (index + 12 > len(text) || text[index + 6:index + 8] != "\\u") {
+        return true;
+      }
+      const [low, lowError] = strconv.ParseUint(text[index + 8:index + 12], 16, 16);
+      if (lowError != nil || low < 0xdc00 || low > 0xdfff) {
+        return true;
+      }
+      index += 11;
+    } else {
+      index += 5;
+    }
+  }
+  return false;
+}
+
+struct JSONFieldScope {
+  object: boolean;
+  names: string[];
+  key: boolean;
+}
+
+// Token decoding preserves repeated keys and decodes escaped names. Fold names
+// as the native struct decoder does, while keeping separate object scopes.
+function duplicateJSONFieldError(text: string): error {
+  const decoder = json.NewDecoder(strings.NewReader(text));
+  decoder.UseNumber();
+  const delimiterType = reflect.TypeOf(json.Delim(0));
+  let scopes: JSONFieldScope[] = [];
+  while (true) {
+    const [token, tokenError] = decoder.Token();
+    if (errors.Is(tokenError, io.EOF)) {
+      return nil;
+    }
+    if (tokenError != nil) {
+      return tokenError;
+    }
+    if (reflect.TypeOf(token) == delimiterType) {
+      const delimiter = token as! json.Delim;
+      if (delimiter == json.Delim(123) || delimiter == json.Delim(91)) {
+        if (len(scopes) > 0) {
+          scopes[len(scopes) - 1].key = true;
+        }
+        scopes = append(scopes, JSONFieldScope { object: delimiter == json.Delim(123), names: [], key: true });
+      } else {
+        scopes = scopes[0:len(scopes) - 1];
+      }
+      continue;
+    }
+    if (len(scopes) == 0 || !scopes[len(scopes) - 1].object) {
+      continue;
+    }
+    let scope = scopes[len(scopes) - 1];
+    if (scope.key) {
+      const name = token as! string;
+      for (const seen of scope.names) {
+        if (strings.EqualFold(seen, name)) {
+          return fmt.Errorf("duplicate JSON field %q", name);
+        }
+      }
+      scope.names = append(scope.names, name);
+    }
+    scope.key = !scope.key;
+    scopes[len(scopes) - 1] = scope;
+  }
+  return nil;
+}
+
+function readRerunSelection(text: string): RerunSelection {
+  if (!utf8.ValidString(text)) {
+    throw errors.New("rerun selection must be valid UTF-8");
+  }
+  if (hasUnpairedJSONSurrogate(text)) {
+    throw errors.New("rerun selection must use paired Unicode surrogate escapes");
+  }
+  const fieldError = duplicateJSONFieldError(text);
+  if (fieldError != nil) {
+    throw fmt.Errorf("invalid rerun selection: %w", fieldError);
+  }
+  const target = reflect.New(reflect.TypeOf(RerunSelection { all: false, suites: [] }));
+  const parseError = json.Unmarshal(bytes.NewBufferString(text).Bytes(), target.Interface());
+  if (parseError != nil) {
+    throw fmt.Errorf("invalid rerun selection: %w", parseError);
+  }
+  return target.Elem().Interface() as! RerunSelection;
+}
+
+function matchesRerun(selection: RerunSelection, suite: string, name: string): boolean {
+  if (selection.all) {
+    return true;
+  }
+  for (const entry of selection.suites) {
+    if (entry.name == suite) {
+      if (entry.wholeSuite) {
+        return true;
+      }
+      for (const selected of entry.cases) {
+        if (selected == name) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+export struct TestFailure {
+  public phase: string;
+  public message: string;
+  public location: TestLocation;
+}
+
+class FailureError implements error {
+  private cause: error;
+  private location: TestLocation;
+
+  constructor(cause: error, location: TestLocation) {
+    this.cause = cause;
+    this.location = location;
+  }
+
+  public function Error(): string {
+    return this.cause.Error();
+  }
+
+  public function Unwrap(): error {
+    return this.cause;
+  }
+
+  public function origin(): TestLocation {
+    return this.location;
+  }
+}
+
+class SkipTestError implements error {
+  private reason: string;
+
+  constructor(reason: string) {
+    this.reason = reason;
+  }
+
+  public function Error(): string {
+    return this.reason;
+  }
+}
+
+function testSkipReason(err: error): string {
+  const skipType = reflect.TypeOf(new SkipTestError(""));
+  let current = err;
+  // Follow ordinary wrappers (including explicit locations). A joined error
+  // is still a failure: one skipped branch must not hide another error.
+  while (current != nil) {
+    if (reflect.TypeOf(current) == skipType) {
+      return current.Error();
+    }
+    current = errors.Unwrap(current);
+  }
+  return "";
+}
+
+export function skipTest(reason: string): void {
+  if (strings.TrimSpace(reason) == "") {
+    throw assertionError(errors.New("skipTest reason must not be empty"));
+  }
+  throw new SkipTestError(reason);
+}
+
+function emptyLocation(): TestLocation {
+  return TestLocation { file: "", line: 0, source: "" };
+}
+
+class DiagnosticScan {
+  private active: Map<string, boolean>;
+  private remaining: int;
+  private formatterType: reflect.Type;
+  private goStringerType: reflect.Type;
+
+  constructor() {
+    this.active = makeMap[string, boolean]();
+    this.remaining = 4096;
+    let formatter: fmt.Formatter = nil;
+    let goStringer: fmt.GoStringer = nil;
+    this.formatterType = reflect.TypeOf(&formatter).Elem();
+    this.goStringerType = reflect.TypeOf(&goStringer).Elem();
+  }
+
+  public function reason(value: reflect.Value, depth: int): string {
+    if (!value.IsValid()) {
+      return "";
+    }
+    // fmt owns explicit formatting methods; preserve their native behavior.
+    if (value.CanInterface() && (value.Type().Implements(this.formatterType) || value.Type().Implements(this.goStringerType))) {
+      return "";
+    }
+    if (depth >= 64 || this.remaining == 0) {
+      return "diagnostic traversal limit";
+    }
+    this.remaining--;
+    const kind = value.Kind();
+    if (kind == reflect.Interface) {
+      if (value.IsNil()) { return ""; }
+      return this.reason(value.Elem(), depth + 1);
+    }
+    let identity = "";
+    if (kind == reflect.Map || kind == reflect.Slice || kind == reflect.Ptr) {
+      if (value.IsNil()) { return ""; }
+      let length = 0;
+      if (kind != reflect.Ptr) {
+        length = value.Len();
+        if (length == 0) { return ""; }
+      }
+      identity = fmt.Sprintf("%s:%x:%d", value.Type().String(), value.Pointer(), length);
+      if (this.active[identity]) {
+        return "cyclic value";
+      }
+      this.active[identity] = true;
+    }
+    try {
+      if (kind == reflect.Ptr) {
+        return this.reason(value.Elem(), depth + 1);
+      }
+      if (kind == reflect.Map) {
+        const entries = value.MapRange();
+        while (entries.Next()) {
+          const keyReason = this.reason(entries.Key(), depth + 1);
+          if (keyReason != "") { return keyReason; }
+          const valueReason = this.reason(entries.Value(), depth + 1);
+          if (valueReason != "") { return valueReason; }
+        }
+      }
+      if (kind == reflect.Slice || kind == reflect.Array) {
+        for (let index = 0; index < value.Len(); index++) {
+          const reason = this.reason(value.Index(index), depth + 1);
+          if (reason != "") { return reason; }
+        }
+      }
+      if (kind == reflect.Struct) {
+        for (let index = 0; index < value.NumField(); index++) {
+          const reason = this.reason(value.Field(index), depth + 1);
+          if (reason != "") { return reason; }
+        }
+      }
+      return "";
+    } finally {
+      if (identity != "") { this.active[identity] = false; }
+    }
+  }
+}
+
+function diagnosticValue<T>(value: T): string {
+  const reflected = reflect.ValueOf(value);
+  const reason = new DiagnosticScan().reason(reflected, 0);
+  if (reason != "") {
+    return fmt.Sprintf("%s(<%s>)", reflected.Type().String(), reason);
+  }
+  return fmt.Sprintf("%#v", value);
+}
+
+class DiagnosticArgument<T> implements fmt.GoStringer {
+  private value: T;
+
+  constructor(value: T) {
+    this.value = value;
+  }
+
+  public function GoString(): string {
+    return diagnosticValue<T>(this.value);
+  }
+}
+
+function diagnosticArgument<T>(value: T): DiagnosticArgument<T> {
+  // Capture every argument before fmt calls any user formatting method.
+  return new DiagnosticArgument<T>(value);
+}
+
+function assertionError(cause: error): error {
+  const [pc, file, line, found] = runtime.Caller(2);
+  if (!found || file == "" || line <= 0) {
+    return cause;
+  }
+  let source = "go";
+  if (strings.HasSuffix(file, ".km")) {
+    source = "kinmokusei";
+  }
+  return new FailureError(cause, TestLocation { file: file, line: line, source: source });
+}
+
+function callerLocation(): TestLocation {
+  const [pc, file, line, found] = runtime.Caller(2);
+  if (!found || file == "" || line <= 0) {
+    return emptyLocation();
+  }
+  let source = "go";
+  if (strings.HasSuffix(file, ".km")) {
+    source = "kinmokusei";
+  }
+  return TestLocation { file: file, line: line, source: source };
+}
+
+function failureLocation(err: error): TestLocation {
+  const target = reflect.New(reflect.TypeOf(new FailureError(nil, emptyLocation())));
+  if (errors.As(err, target.Interface())) {
+    const values = target.Elem().MethodByName("Origin").Call([]);
+    return values[0].Interface() as! TestLocation;
+  }
+  return emptyLocation();
+}
+
+function failureDetail(phase: string, err: error): TestFailure {
+  return TestFailure { phase: phase, message: err.Error(), location: failureLocation(err) };
+}
+
+export function withTestLocation(file: string, line: int, body: () => void): void {
+  if (strings.TrimSpace(file) == "" || strings.ContainsAny(file, "\r\n\x00")) {
+    throw errors.New("test location file must be non-empty and contain no line breaks or NUL");
+  }
+  if (line <= 0) {
+    throw errors.New("test location line must be positive");
+  }
+  if (body == nil) {
+    throw errors.New("withTestLocation body must not be nil");
+  }
+  try {
+    body();
+  } catch (err: error) {
+    throw new FailureError(err, TestLocation { file: file, line: line, source: "explicit" });
+  }
+}
+
+struct MockImplementation<A, R> {
+  body: (argument: A) => R;
+}
+
+export struct MockResult<R> {
+  public status: string;
+  public value: R;
+  public exception: error;
+}
+
+class MockOutcome<R> {
+  public result: MockResult<R>;
+
+  constructor() {
+    this.result.status = "incomplete";
+  }
+}
+
+export interface MockCallSource<A> {
+  function calls(): A[];
+}
+
+export interface MockReturnSource<R> {
+  function results(): MockResult<R>[];
+}
+
+export struct MockOutcomeResult {
+  public status: string;
+  public exception: error;
+}
+
+export interface MockOutcomeSource {
+  function outcomes(): MockOutcomeResult[];
+}
+
+export class MockFn<A, R> implements MockCallSource<A>, MockReturnSource<R>, MockOutcomeSource {
+  private implementation: (argument: A) => R;
+  private once: MockImplementation<A, R>[];
+  private history: A[];
+  private outcomeHistory: MockOutcome<R>[];
+  private mutex: sync.Mutex;
+
+  constructor(implementation: (argument: A) => R) {
+    if (implementation == nil) {
+      throw errors.New("mock implementation must not be nil");
+    }
+    this.implementation = implementation;
+    this.once = [];
+    this.history = [];
+    this.outcomeHistory = [];
+  }
+
+  public function invoke(argument: A): R {
+    this.mutex.Lock();
+    this.history = append(this.history, argument);
+    const outcome = new MockOutcome<R>();
+    this.outcomeHistory = append(this.outcomeHistory, outcome);
+    let implementation = this.implementation;
+    if (len(this.once) > 0) {
+      implementation = this.once[0].body;
+      this.once[0] = MockImplementation<A, R> { body: nil };
+      this.once = this.once[1:];
+    }
+    this.mutex.Unlock();
+    // Call outside the lock so implementations can inspect or call the mock.
+    let result = outcome.result;
+    result.status = "panic";
+    try {
+      const value = implementation(argument);
+      result = MockResult<R> { status: "return", value: value, exception: nil };
+      return value;
+    } catch (err: error) {
+      result.status = "throw";
+      result.exception = err;
+      throw;
+    } finally {
+      this.mutex.Lock();
+      outcome.result = result;
+      this.mutex.Unlock();
+    }
+  }
+
+  public function implement(implementation: (argument: A) => R): void {
+    if (implementation == nil) {
+      throw errors.New("mock implementation must not be nil");
+    }
+    this.mutex.Lock();
+    this.implementation = implementation;
+    this.mutex.Unlock();
+  }
+
+  public function implementOnce(implementation: (argument: A) => R): void {
+    if (implementation == nil) {
+      throw errors.New("mock implementation must not be nil");
+    }
+    this.mutex.Lock();
+    this.once = append(this.once, MockImplementation<A, R> { body: implementation });
+    this.mutex.Unlock();
+  }
+
+  public function returnValue(value: R): void {
+    this.implement((argument: A): R => { return value; });
+  }
+
+  public function returnValueOnce(value: R): void {
+    this.implementOnce((argument: A): R => { return value; });
+  }
+
+  public function throwError(exception: error): void {
+    this.implement((argument: A): R => { throw exception; });
+  }
+
+  public function throwErrorOnce(exception: error): void {
+    this.implementOnce((argument: A): R => { throw exception; });
+  }
+
+  public function callCount(): int {
+    this.mutex.Lock();
+    const count = len(this.history);
+    this.mutex.Unlock();
+    return count;
+  }
+
+  public function calls(): A[] {
+    this.mutex.Lock();
+    let copied: A[] = [];
+    for (const argument of this.history) {
+      copied = append(copied, argument);
+    }
+    this.mutex.Unlock();
+    return copied;
+  }
+
+  public function clearCalls(): void {
+    this.mutex.Lock();
+    this.history = [];
+    this.outcomeHistory = [];
+    this.mutex.Unlock();
+  }
+
+  public function reset(implementation: (argument: A) => R): void {
+    if (implementation == nil) {
+      throw errors.New("mock implementation must not be nil");
+    }
+    this.mutex.Lock();
+    this.implementation = implementation;
+    this.once = [];
+    this.history = [];
+    this.outcomeHistory = [];
+    this.mutex.Unlock();
+  }
+
+  public function results(): MockResult<R>[] {
+    this.mutex.Lock();
+    let copied: MockResult<R>[] = [];
+    for (const outcome of this.outcomeHistory) {
+      copied = append(copied, outcome.result);
+    }
+    this.mutex.Unlock();
+    return copied;
+  }
+
+  public function expectReturnedTimes(expected: int): void {
+    if (expected < 0) {
+      throw assertionError(errors.New("expected mock return count must not be negative"));
+    }
+    let actual = 0;
+    for (const result of this.results()) {
+      if (result.status == "return") {
+        actual++;
+      }
+    }
+    if (actual != expected) {
+      throw assertionError(fmt.Errorf("expected mock to return %d time(s), got %d", expected, actual));
+    }
+  }
+
+  public function outcomes(): MockOutcomeResult[] {
+    let copied: MockOutcomeResult[] = [];
+    for (const result of this.results()) {
+      copied = append(copied, MockOutcomeResult { status: result.status, exception: result.exception });
+    }
+    return copied;
+  }
+
+  public function expectReturnedWith(expected: R): void {
+    const results = this.results();
+    for (const result of results) {
+      if (result.status == "return" && reflect.DeepEqual(result.value, expected)) {
+        return;
+      }
+    }
+    throw assertionError(fmt.Errorf("expected mock to return %#v, got results %#v", diagnosticArgument(expected), diagnosticArgument(results)));
+  }
+
+  public function expectNthReturnedWith(index: int, expected: R): void {
+    const result = this.resultAt(index, callerLocation());
+    if (result.status != "return") {
+      throw assertionError(fmt.Errorf("expected mock call %d to return %#v, got status %q", index, diagnosticArgument(expected), result.status));
+    }
+    if (!reflect.DeepEqual(result.value, expected)) {
+      throw assertionError(fmt.Errorf("expected mock call %d to return %#v, got %#v", index, diagnosticArgument(expected), diagnosticArgument(result.value)));
+    }
+  }
+
+  public function expectThrownTimes(expected: int): void {
+    if (expected < 0) {
+      throw assertionError(errors.New("expected mock throw count must not be negative"));
+    }
+    let actual = 0;
+    for (const result of this.results()) {
+      if (result.status == "throw") {
+        actual++;
+      }
+    }
+    if (actual != expected) {
+      throw assertionError(fmt.Errorf("expected mock to throw %d time(s), got %d", expected, actual));
+    }
+  }
+
+  public function expectNthThrownMessage(index: int, fragment: string): void {
+    if (fragment == "") {
+      throw assertionError(errors.New("expected mock error fragment must not be empty"));
+    }
+    const result = this.resultAt(index, callerLocation());
+    if (result.status != "throw") {
+      throw assertionError(fmt.Errorf("expected mock call %d to throw containing %q, got status %q", index, fragment, result.status));
+    }
+    let message = "";
+    if (result.exception != nil) {
+      message = result.exception.Error();
+    }
+    if (!strings.Contains(message, fragment)) {
+      throw assertionError(fmt.Errorf("expected mock call %d to throw containing %q, got %q", index, fragment, message));
+    }
+  }
+
+  private function resultAt(index: int, location: TestLocation): MockResult<R> {
+    if (index < 1) {
+      throw new FailureError(errors.New("mock call index must be at least 1"), location);
+    }
+    const results = this.results();
+    if (index > len(results)) {
+      throw new FailureError(fmt.Errorf("expected mock call %d, got %d call(s)", index, len(results)), location);
+    }
+    return results[index - 1];
+  }
+
+  public function expectCalledTimes(expected: int): void {
+    if (expected < 0) {
+      throw assertionError(errors.New("expected mock call count must not be negative"));
+    }
+    const actual = this.callCount();
+    if (actual != expected) {
+      throw assertionError(fmt.Errorf("expected mock to be called %d time(s), got %d", expected, actual));
+    }
+  }
+
+  public function expectCalledWith(expected: A): void {
+    const calls = this.calls();
+    for (const argument of calls) {
+      if (reflect.DeepEqual(argument, expected)) {
+        return;
+      }
+    }
+    throw assertionError(fmt.Errorf("expected mock to be called with %#v, got calls %#v", diagnosticArgument(expected), diagnosticArgument(calls)));
+  }
+
+  public function expectNthCalledWith(index: int, expected: A): void {
+    if (index < 1) {
+      throw assertionError(errors.New("mock call index must be at least 1"));
+    }
+    const calls = this.calls();
+    if (index > len(calls)) {
+      throw assertionError(fmt.Errorf("expected mock call %d, got %d call(s)", index, len(calls)));
+    }
+    const actual = calls[index - 1];
+    if (!reflect.DeepEqual(actual, expected)) {
+      throw assertionError(fmt.Errorf("expected mock call %d with %#v, got %#v", index, diagnosticArgument(expected), diagnosticArgument(actual)));
+    }
+  }
+}
+
+export struct MockActionResult {
+  public status: string;
+  public exception: error;
+}
+
+export class MockAction<A> implements MockCallSource<A>, MockOutcomeSource {
+  private mock: MockFn<A, boolean>;
+
+  constructor(implementation: (argument: A) => void) {
+    if (implementation == nil) {
+      throw errors.New("mock implementation must not be nil");
+    }
+    this.mock = new MockFn<A, boolean>((argument: A): boolean => {
+      implementation(argument);
+      return true;
+    });
+  }
+
+  public function invoke(argument: A): void {
+    this.mock.invoke(argument);
+  }
+
+  public function implement(implementation: (argument: A) => void): void {
+    if (implementation == nil) {
+      throw errors.New("mock implementation must not be nil");
+    }
+    this.mock.implement((argument: A): boolean => {
+      implementation(argument);
+      return true;
+    });
+  }
+
+  public function implementOnce(implementation: (argument: A) => void): void {
+    if (implementation == nil) {
+      throw errors.New("mock implementation must not be nil");
+    }
+    this.mock.implementOnce((argument: A): boolean => {
+      implementation(argument);
+      return true;
+    });
+  }
+
+  public function throwError(exception: error): void {
+    this.mock.throwError(exception);
+  }
+
+  public function throwErrorOnce(exception: error): void {
+    this.mock.throwErrorOnce(exception);
+  }
+
+  public function callCount(): int {
+    return this.mock.callCount();
+  }
+
+  public function calls(): A[] {
+    return this.mock.calls();
+  }
+
+  public function clearCalls(): void {
+    this.mock.clearCalls();
+  }
+
+  public function reset(implementation: (argument: A) => void): void {
+    if (implementation == nil) {
+      throw errors.New("mock implementation must not be nil");
+    }
+    this.mock.reset((argument: A): boolean => {
+      implementation(argument);
+      return true;
+    });
+  }
+
+  public function results(): MockActionResult[] {
+    let copied: MockActionResult[] = [];
+    for (const result of this.mock.results()) {
+      copied = append(copied, MockActionResult { status: result.status, exception: result.exception });
+    }
+    return copied;
+  }
+
+  public function outcomes(): MockOutcomeResult[] {
+    return this.mock.outcomes();
+  }
+
+  public function expectReturnedTimes(expected: int): void {
+    const location = callerLocation();
+    try {
+      this.mock.expectReturnedTimes(expected);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function expectThrownTimes(expected: int): void {
+    const location = callerLocation();
+    try {
+      this.mock.expectThrownTimes(expected);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function expectNthThrownMessage(index: int, fragment: string): void {
+    const location = callerLocation();
+    try {
+      this.mock.expectNthThrownMessage(index, fragment);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function expectCalledTimes(expected: int): void {
+    const location = callerLocation();
+    try {
+      this.mock.expectCalledTimes(expected);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function expectCalledWith(expected: A): void {
+    const location = callerLocation();
+    try {
+      this.mock.expectCalledWith(expected);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function expectNthCalledWith(index: int, expected: A): void {
+    const location = callerLocation();
+    try {
+      this.mock.expectNthCalledWith(index, expected);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+}
+
+export class NegatedMockExpectation<A> {
+  private actual: MockCallSource<A>;
+
+  constructor(actual: MockCallSource<A>) {
+    this.actual = actual;
+  }
+
+  public function toHaveBeenCalled(): void {
+    checkMockCalled<A>(this.actual, true, callerLocation());
+  }
+
+  public function toHaveBeenCalledTimes(expected: int): void {
+    checkMockCalledTimes<A>(this.actual, expected, true, callerLocation());
+  }
+
+  public function toHaveBeenCalledWith(expected: A): void {
+    checkMockCalledWith<A>(this.actual, expected, true, callerLocation());
+  }
+
+  public function toHaveBeenNthCalledWith(index: int, expected: A): void {
+    checkMockIndexedCall<A>(this.actual, index, expected, false, true, callerLocation());
+  }
+
+  public function toHaveBeenLastCalledWith(expected: A): void {
+    checkMockIndexedCall<A>(this.actual, 0, expected, true, true, callerLocation());
+  }
+
+  public function toHaveBeenCalledSatisfying(predicate: (argument: A) => boolean): void {
+    checkMockCallPredicate<A>(this.actual, predicate, true, callerLocation());
+  }
+
+  public function toHaveBeenNthCalledSatisfying(index: int, predicate: (argument: A) => boolean): void {
+    checkMockIndexedCallPredicate<A>(this.actual, index, predicate, false, true, callerLocation());
+  }
+
+  public function toHaveBeenLastCalledSatisfying(predicate: (argument: A) => boolean): void {
+    checkMockIndexedCallPredicate<A>(this.actual, 0, predicate, true, true, callerLocation());
+  }
+}
+
+export class MockExpectation<A> {
+  private actual: MockCallSource<A>;
+  public not: NegatedMockExpectation<A>;
+
+  constructor(actual: MockCallSource<A>) {
+    this.actual = actual;
+    this.not = new NegatedMockExpectation<A>(actual);
+  }
+
+  public function toHaveBeenCalled(): void {
+    checkMockCalled<A>(this.actual, false, callerLocation());
+  }
+
+  public function toHaveBeenCalledTimes(expected: int): void {
+    checkMockCalledTimes<A>(this.actual, expected, false, callerLocation());
+  }
+
+  public function toHaveBeenCalledWith(expected: A): void {
+    checkMockCalledWith<A>(this.actual, expected, false, callerLocation());
+  }
+
+  public function toHaveBeenNthCalledWith(index: int, expected: A): void {
+    checkMockIndexedCall<A>(this.actual, index, expected, false, false, callerLocation());
+  }
+
+  public function toHaveBeenLastCalledWith(expected: A): void {
+    checkMockIndexedCall<A>(this.actual, 0, expected, true, false, callerLocation());
+  }
+
+  public function toHaveBeenCalledSatisfying(predicate: (argument: A) => boolean): void {
+    checkMockCallPredicate<A>(this.actual, predicate, false, callerLocation());
+  }
+
+  public function toHaveBeenNthCalledSatisfying(index: int, predicate: (argument: A) => boolean): void {
+    checkMockIndexedCallPredicate<A>(this.actual, index, predicate, false, false, callerLocation());
+  }
+
+  public function toHaveBeenLastCalledSatisfying(predicate: (argument: A) => boolean): void {
+    checkMockIndexedCallPredicate<A>(this.actual, 0, predicate, true, false, callerLocation());
+  }
+}
+
+export function expectMock<A>(actual: MockCallSource<A>): MockExpectation<A> {
+  return new MockExpectation<A>(actual);
+}
+
+function mockCallSnapshot<A>(actual: MockCallSource<A>, location: TestLocation): A[] {
+  if (isNilValue<MockCallSource<A>>(actual)) {
+    throw new FailureError(errors.New("mock call source must not be nil"), location);
+  }
+  return actual.calls();
+}
+
+function checkMockCalled<A>(actual: MockCallSource<A>, negated: boolean, location: TestLocation): void {
+  const calls = mockCallSnapshot<A>(actual, location);
+  if ((len(calls) > 0) == negated) {
+    if (negated) {
+      throw new FailureError(fmt.Errorf("expected mock not to have been called, got %d call(s)", len(calls)), location);
+    }
+    throw new FailureError(errors.New("expected mock to have been called, got no calls"), location);
+  }
+}
+
+function checkMockCalledTimes<A>(actual: MockCallSource<A>, expected: int, negated: boolean, location: TestLocation): void {
+  if (expected < 0) {
+    throw new FailureError(errors.New("expected mock call count must not be negative"), location);
+  }
+  const calls = mockCallSnapshot<A>(actual, location);
+  if ((len(calls) == expected) == negated) {
+    if (negated) {
+      throw new FailureError(fmt.Errorf("expected mock not to have been called %d time(s), got %d", expected, len(calls)), location);
+    }
+    throw new FailureError(fmt.Errorf("expected mock to have been called %d time(s), got %d", expected, len(calls)), location);
+  }
+}
+
+function checkMockCalledWith<A>(actual: MockCallSource<A>, expected: A, negated: boolean, location: TestLocation): void {
+  const calls = mockCallSnapshot<A>(actual, location);
+  let matches = false;
+  for (const argument of calls) {
+    if (reflect.DeepEqual(argument, expected)) {
+      matches = true;
+      break;
+    }
+  }
+  if (matches == negated) {
+    if (negated) {
+      throw new FailureError(fmt.Errorf("expected mock not to have been called with %#v, got calls %#v", diagnosticArgument(expected), diagnosticArgument(calls)), location);
+    }
+    throw new FailureError(fmt.Errorf("expected mock to have been called with %#v, got calls %#v", diagnosticArgument(expected), diagnosticArgument(calls)), location);
+  }
+}
+
+function checkMockIndexedCall<A>(actual: MockCallSource<A>, index: int, expected: A, last: boolean, negated: boolean, location: TestLocation): void {
+  if (!last && index < 1) {
+    throw new FailureError(errors.New("mock call index must be at least 1"), location);
+  }
+  const calls = mockCallSnapshot<A>(actual, location);
+  let name = fmt.Sprintf("call %d", index);
+  if (last) {
+    index = len(calls);
+    name = "last call";
+  }
+  const present = index > 0 && index <= len(calls);
+  const matches = present && reflect.DeepEqual(calls[index - 1], expected);
+  if (matches == negated) {
+    if (negated) {
+      throw new FailureError(fmt.Errorf("expected mock %s not to have argument %#v", name, diagnosticArgument(expected)), location);
+    }
+    if (!present) {
+      throw new FailureError(fmt.Errorf("expected mock %s with %#v, got %d call(s)", name, diagnosticArgument(expected), len(calls)), location);
+    }
+    throw new FailureError(fmt.Errorf("expected mock %s with %#v, got %#v", name, diagnosticArgument(expected), diagnosticArgument(calls[index - 1])), location);
+  }
+}
+
+function checkMockCallPredicate<A>(actual: MockCallSource<A>, predicate: (argument: A) => boolean, negated: boolean, location: TestLocation): void {
+  if (predicate == nil) {
+    throw new FailureError(errors.New("toHaveBeenCalledSatisfying predicate must not be nil"), location);
+  }
+  const calls = mockCallSnapshot<A>(actual, location);
+  let matches = false;
+  let checked = 0;
+  for (const argument of calls) {
+    checked++;
+    if (predicate(argument)) {
+      matches = true;
+      break;
+    }
+  }
+  if (matches == negated) {
+    let qualifier = "";
+    if (negated) {
+      qualifier = "not ";
+    }
+    throw new FailureError(fmt.Errorf("expected mock %sto have a call argument satisfying predicate, checked %d of %d call(s)", qualifier, checked, len(calls)), location);
+  }
+}
+
+function checkMockIndexedCallPredicate<A>(actual: MockCallSource<A>, index: int, predicate: (argument: A) => boolean, last: boolean, negated: boolean, location: TestLocation): void {
+  let matcher = "toHaveBeenNthCalledSatisfying";
+  if (last) {
+    matcher = "toHaveBeenLastCalledSatisfying";
+  }
+  if (predicate == nil) {
+    throw new FailureError(fmt.Errorf("%s predicate must not be nil", matcher), location);
+  }
+  if (!last && index < 1) {
+    throw new FailureError(errors.New("mock call index must be at least 1"), location);
+  }
+  const calls = mockCallSnapshot<A>(actual, location);
+  let name = fmt.Sprintf("call %d", index);
+  if (last) {
+    index = len(calls);
+    name = "last call";
+  }
+  if (index > len(calls) || index < 1) {
+    if (negated) {
+      return;
+    }
+    throw new FailureError(fmt.Errorf("expected mock %s with argument satisfying predicate, got %d call(s)", name, len(calls)), location);
+  }
+  if (predicate(calls[index - 1]) == negated) {
+    if (negated) {
+      throw new FailureError(fmt.Errorf("expected mock %s argument not to satisfy predicate", name), location);
+    }
+    throw new FailureError(fmt.Errorf("expected mock %s argument to satisfy predicate", name), location);
+  }
+}
+
+export class NegatedMockReturnExpectation<R> {
+  private actual: MockReturnSource<R>;
+
+  constructor(actual: MockReturnSource<R>) {
+    this.actual = actual;
+  }
+
+  public function toHaveReturned(): void {
+    checkMockReturned<R>(this.actual, true, callerLocation());
+  }
+
+  public function toHaveReturnedTimes(expected: int): void {
+    checkMockReturnedTimes<R>(this.actual, expected, true, callerLocation());
+  }
+
+  public function toHaveReturnedWith(expected: R): void {
+    checkMockReturnedWith<R>(this.actual, expected, true, callerLocation());
+  }
+
+  public function toHaveNthReturnedWith(index: int, expected: R): void {
+    checkMockIndexedReturn<R>(this.actual, index, expected, false, true, callerLocation());
+  }
+
+  public function toHaveLastReturnedWith(expected: R): void {
+    checkMockIndexedReturn<R>(this.actual, 0, expected, true, true, callerLocation());
+  }
+
+  public function toHaveReturnedSatisfying(predicate: (value: R) => boolean): void {
+    checkMockReturnPredicate<R>(this.actual, predicate, true, callerLocation());
+  }
+
+  public function toHaveNthReturnedSatisfying(index: int, predicate: (value: R) => boolean): void {
+    checkMockIndexedReturnPredicate<R>(this.actual, index, predicate, false, true, callerLocation());
+  }
+
+  public function toHaveLastReturnedSatisfying(predicate: (value: R) => boolean): void {
+    checkMockIndexedReturnPredicate<R>(this.actual, 0, predicate, true, true, callerLocation());
+  }
+}
+
+export class MockReturnExpectation<R> {
+  private actual: MockReturnSource<R>;
+  public not: NegatedMockReturnExpectation<R>;
+
+  constructor(actual: MockReturnSource<R>) {
+    this.actual = actual;
+    this.not = new NegatedMockReturnExpectation<R>(actual);
+  }
+
+  public function toHaveReturned(): void {
+    checkMockReturned<R>(this.actual, false, callerLocation());
+  }
+
+  public function toHaveReturnedTimes(expected: int): void {
+    checkMockReturnedTimes<R>(this.actual, expected, false, callerLocation());
+  }
+
+  public function toHaveReturnedWith(expected: R): void {
+    checkMockReturnedWith<R>(this.actual, expected, false, callerLocation());
+  }
+
+  public function toHaveNthReturnedWith(index: int, expected: R): void {
+    checkMockIndexedReturn<R>(this.actual, index, expected, false, false, callerLocation());
+  }
+
+  public function toHaveLastReturnedWith(expected: R): void {
+    checkMockIndexedReturn<R>(this.actual, 0, expected, true, false, callerLocation());
+  }
+
+  public function toHaveReturnedSatisfying(predicate: (value: R) => boolean): void {
+    checkMockReturnPredicate<R>(this.actual, predicate, false, callerLocation());
+  }
+
+  public function toHaveNthReturnedSatisfying(index: int, predicate: (value: R) => boolean): void {
+    checkMockIndexedReturnPredicate<R>(this.actual, index, predicate, false, false, callerLocation());
+  }
+
+  public function toHaveLastReturnedSatisfying(predicate: (value: R) => boolean): void {
+    checkMockIndexedReturnPredicate<R>(this.actual, 0, predicate, true, false, callerLocation());
+  }
+}
+
+export function expectMockReturn<R>(actual: MockReturnSource<R>): MockReturnExpectation<R> {
+  return new MockReturnExpectation<R>(actual);
+}
+
+function mockReturnSnapshot<R>(actual: MockReturnSource<R>, location: TestLocation): MockResult<R>[] {
+  if (isNilValue<MockReturnSource<R>>(actual)) {
+    throw new FailureError(errors.New("mock return source must not be nil"), location);
+  }
+  return actual.results();
+}
+
+function mockReturnCount<R>(results: MockResult<R>[]): int {
+  let count = 0;
+  for (const result of results) {
+    if (result.status == "return") {
+      count++;
+    }
+  }
+  return count;
+}
+
+function checkMockReturned<R>(actual: MockReturnSource<R>, negated: boolean, location: TestLocation): void {
+  const results = mockReturnSnapshot<R>(actual, location);
+  const count = mockReturnCount<R>(results);
+  if ((count > 0) == negated) {
+    if (negated) {
+      throw new FailureError(fmt.Errorf("expected mock not to have returned, got %d return(s)", count), location);
+    }
+    throw new FailureError(errors.New("expected mock to have returned, got no returns"), location);
+  }
+}
+
+function checkMockReturnedTimes<R>(actual: MockReturnSource<R>, expected: int, negated: boolean, location: TestLocation): void {
+  if (expected < 0) {
+    throw new FailureError(errors.New("expected mock return count must not be negative"), location);
+  }
+  const count = mockReturnCount<R>(mockReturnSnapshot<R>(actual, location));
+  if ((count == expected) == negated) {
+    if (negated) {
+      throw new FailureError(fmt.Errorf("expected mock not to have returned %d time(s), got %d", expected, count), location);
+    }
+    throw new FailureError(fmt.Errorf("expected mock to have returned %d time(s), got %d", expected, count), location);
+  }
+}
+
+function checkMockReturnedWith<R>(actual: MockReturnSource<R>, expected: R, negated: boolean, location: TestLocation): void {
+  const results = mockReturnSnapshot<R>(actual, location);
+  let matches = false;
+  for (const result of results) {
+    if (result.status == "return" && reflect.DeepEqual(result.value, expected)) {
+      matches = true;
+      break;
+    }
+  }
+  if (matches == negated) {
+    if (negated) {
+      throw new FailureError(fmt.Errorf("expected mock not to have returned %#v, got results %#v", diagnosticArgument(expected), diagnosticArgument(results)), location);
+    }
+    throw new FailureError(fmt.Errorf("expected mock to have returned %#v, got results %#v", diagnosticArgument(expected), diagnosticArgument(results)), location);
+  }
+}
+
+function checkMockIndexedReturn<R>(actual: MockReturnSource<R>, index: int, expected: R, last: boolean, negated: boolean, location: TestLocation): void {
+  if (!last && index < 1) {
+    throw new FailureError(errors.New("mock call index must be at least 1"), location);
+  }
+  const results = mockReturnSnapshot<R>(actual, location);
+  let name = fmt.Sprintf("call %d", index);
+  if (last) {
+    index = len(results);
+    name = "last call";
+  }
+  const present = index > 0 && index <= len(results);
+  const matches = present && results[index - 1].status == "return" && reflect.DeepEqual(results[index - 1].value, expected);
+  if (matches == negated) {
+    if (negated) {
+      throw new FailureError(fmt.Errorf("expected mock %s not to have returned %#v", name, diagnosticArgument(expected)), location);
+    }
+    if (!present) {
+      throw new FailureError(fmt.Errorf("expected mock %s to return %#v, got %d call(s)", name, diagnosticArgument(expected), len(results)), location);
+    }
+    if (results[index - 1].status != "return") {
+      throw new FailureError(fmt.Errorf("expected mock %s to return %#v, got status %q", name, diagnosticArgument(expected), results[index - 1].status), location);
+    }
+    throw new FailureError(fmt.Errorf("expected mock %s to return %#v, got %#v", name, diagnosticArgument(expected), diagnosticArgument(results[index - 1].value)), location);
+  }
+}
+
+function checkMockReturnPredicate<R>(actual: MockReturnSource<R>, predicate: (value: R) => boolean, negated: boolean, location: TestLocation): void {
+  if (predicate == nil) {
+    throw new FailureError(errors.New("toHaveReturnedSatisfying predicate must not be nil"), location);
+  }
+  const results = mockReturnSnapshot<R>(actual, location);
+  let matches = false;
+  let checked = 0;
+  for (const result of results) {
+    if (result.status == "return") {
+      checked++;
+      if (predicate(result.value)) {
+        matches = true;
+        break;
+      }
+    }
+  }
+  if (matches == negated) {
+    let qualifier = "";
+    if (negated) {
+      qualifier = "not ";
+    }
+    throw new FailureError(fmt.Errorf("expected mock %sto have a returned value satisfying predicate, checked %d returned value(s) across %d call(s)", qualifier, checked, len(results)), location);
+  }
+}
+
+function checkMockIndexedReturnPredicate<R>(actual: MockReturnSource<R>, index: int, predicate: (value: R) => boolean, last: boolean, negated: boolean, location: TestLocation): void {
+  let matcher = "toHaveNthReturnedSatisfying";
+  if (last) {
+    matcher = "toHaveLastReturnedSatisfying";
+  }
+  if (predicate == nil) {
+    throw new FailureError(fmt.Errorf("%s predicate must not be nil", matcher), location);
+  }
+  if (!last && index < 1) {
+    throw new FailureError(errors.New("mock call index must be at least 1"), location);
+  }
+  const results = mockReturnSnapshot<R>(actual, location);
+  let name = fmt.Sprintf("call %d", index);
+  if (last) {
+    index = len(results);
+    name = "last call";
+  }
+  if (index < 1 || index > len(results)) {
+    if (negated) {
+      return;
+    }
+    throw new FailureError(fmt.Errorf("expected mock %s to return a value satisfying predicate, got %d call(s)", name, len(results)), location);
+  }
+  const result = results[index - 1];
+  if (result.status != "return") {
+    if (negated) {
+      return;
+    }
+    throw new FailureError(fmt.Errorf("expected mock %s to return a value satisfying predicate, got status %q", name, result.status), location);
+  }
+  if (predicate(result.value) == negated) {
+    if (negated) {
+      throw new FailureError(fmt.Errorf("expected mock %s returned value not to satisfy predicate", name), location);
+    }
+    throw new FailureError(fmt.Errorf("expected mock %s returned value to satisfy predicate", name), location);
+  }
+}
+
+export class NegatedMockOutcomeExpectation {
+  private actual: MockOutcomeSource;
+
+  constructor(actual: MockOutcomeSource) {
+    this.actual = actual;
+  }
+
+  public function toHaveReturned(): void {
+    checkMockOutcome(this.actual, "return", true, callerLocation());
+  }
+
+  public function toHaveReturnedTimes(expected: int): void {
+    checkMockOutcomeTimes(this.actual, "return", expected, true, callerLocation());
+  }
+
+  public function toHaveThrown(): void {
+    checkMockOutcome(this.actual, "throw", true, callerLocation());
+  }
+
+  public function toHaveThrownTimes(expected: int): void {
+    checkMockOutcomeTimes(this.actual, "throw", expected, true, callerLocation());
+  }
+
+  public function toHaveThrownSatisfying(predicate: (exception: error) => boolean): void {
+    checkMockThrownPredicate(this.actual, predicate, true, callerLocation());
+  }
+
+  public function toHaveNthThrownSatisfying(index: int, predicate: (exception: error) => boolean): void {
+    checkMockIndexedThrownPredicate(this.actual, index, predicate, false, true, callerLocation());
+  }
+
+  public function toHaveLastThrownSatisfying(predicate: (exception: error) => boolean): void {
+    checkMockIndexedThrownPredicate(this.actual, 0, predicate, true, true, callerLocation());
+  }
+
+  public function toHaveThrownTypeSatisfying<T>(predicate: (value: T) => boolean): void {
+    checkMockThrownTypePredicate<T>(this.actual, predicate, true, callerLocation());
+  }
+
+  public function toHaveNthThrownTypeSatisfying<T>(index: int, predicate: (value: T) => boolean): void {
+    checkMockIndexedThrownTypePredicate<T>(this.actual, index, predicate, false, true, callerLocation());
+  }
+
+  public function toHaveLastThrownTypeSatisfying<T>(predicate: (value: T) => boolean): void {
+    checkMockIndexedThrownTypePredicate<T>(this.actual, 0, predicate, true, true, callerLocation());
+  }
+
+  public function toHaveNthThrownMessage(index: int, fragment: string): void {
+    checkMockOutcomeMessage(this.actual, index, fragment, false, true, callerLocation());
+  }
+
+  public function toHaveLastThrownMessage(fragment: string): void {
+    checkMockOutcomeMessage(this.actual, 0, fragment, true, true, callerLocation());
+  }
+
+  public function toHaveNthThrownCause(index: int, target: error): void {
+    checkMockOutcomeCause(this.actual, index, target, false, true, callerLocation());
+  }
+
+  public function toHaveLastThrownCause(target: error): void {
+    checkMockOutcomeCause(this.actual, 0, target, true, true, callerLocation());
+  }
+
+  public function toHaveNthThrownType<T>(index: int): void {
+    checkMockOutcomeNotType<T>(this.actual, index, false, "toHaveNthThrownType", callerLocation());
+  }
+
+  public function toHaveLastThrownType<T>(): void {
+    checkMockOutcomeNotType<T>(this.actual, 0, true, "toHaveLastThrownType", callerLocation());
+  }
+}
+
+export class MockOutcomeExpectation {
+  private actual: MockOutcomeSource;
+  public not: NegatedMockOutcomeExpectation;
+
+  constructor(actual: MockOutcomeSource) {
+    this.actual = actual;
+    this.not = new NegatedMockOutcomeExpectation(actual);
+  }
+
+  public function toHaveReturned(): void {
+    checkMockOutcome(this.actual, "return", false, callerLocation());
+  }
+
+  public function toHaveReturnedTimes(expected: int): void {
+    checkMockOutcomeTimes(this.actual, "return", expected, false, callerLocation());
+  }
+
+  public function toHaveThrown(): void {
+    checkMockOutcome(this.actual, "throw", false, callerLocation());
+  }
+
+  public function toHaveThrownTimes(expected: int): void {
+    checkMockOutcomeTimes(this.actual, "throw", expected, false, callerLocation());
+  }
+
+  public function toHaveThrownSatisfying(predicate: (exception: error) => boolean): void {
+    checkMockThrownPredicate(this.actual, predicate, false, callerLocation());
+  }
+
+  public function toHaveNthThrownSatisfying(index: int, predicate: (exception: error) => boolean): void {
+    checkMockIndexedThrownPredicate(this.actual, index, predicate, false, false, callerLocation());
+  }
+
+  public function toHaveLastThrownSatisfying(predicate: (exception: error) => boolean): void {
+    checkMockIndexedThrownPredicate(this.actual, 0, predicate, true, false, callerLocation());
+  }
+
+  public function toHaveThrownTypeSatisfying<T>(predicate: (value: T) => boolean): void {
+    checkMockThrownTypePredicate<T>(this.actual, predicate, false, callerLocation());
+  }
+
+  public function toHaveNthThrownTypeSatisfying<T>(index: int, predicate: (value: T) => boolean): void {
+    checkMockIndexedThrownTypePredicate<T>(this.actual, index, predicate, false, false, callerLocation());
+  }
+
+  public function toHaveLastThrownTypeSatisfying<T>(predicate: (value: T) => boolean): void {
+    checkMockIndexedThrownTypePredicate<T>(this.actual, 0, predicate, true, false, callerLocation());
+  }
+
+  public function toHaveNthThrownMessage(index: int, fragment: string): void {
+    checkMockOutcomeMessage(this.actual, index, fragment, false, false, callerLocation());
+  }
+
+  public function toHaveLastThrownMessage(fragment: string): void {
+    checkMockOutcomeMessage(this.actual, 0, fragment, true, false, callerLocation());
+  }
+
+  public function toHaveNthThrownCause(index: int, target: error): void {
+    checkMockOutcomeCause(this.actual, index, target, false, false, callerLocation());
+  }
+
+  public function toHaveLastThrownCause(target: error): void {
+    checkMockOutcomeCause(this.actual, 0, target, true, false, callerLocation());
+  }
+
+  public function toHaveNthThrownType<T>(index: int, target: *T): void {
+    checkMockOutcomeType<T>(this.actual, index, target, false, "toHaveNthThrownType", callerLocation());
+  }
+
+  public function toHaveLastThrownType<T>(target: *T): void {
+    checkMockOutcomeType<T>(this.actual, 0, target, true, "toHaveLastThrownType", callerLocation());
+  }
+}
+
+export function expectMockOutcome(actual: MockOutcomeSource): MockOutcomeExpectation {
+  return new MockOutcomeExpectation(actual);
+}
+
+function mockOutcomeSnapshot(actual: MockOutcomeSource, location: TestLocation): MockOutcomeResult[] {
+  if (isNilValue<MockOutcomeSource>(actual)) {
+    throw new FailureError(errors.New("mock outcome source must not be nil"), location);
+  }
+  return actual.outcomes();
+}
+
+function mockOutcomeCount(results: MockOutcomeResult[], status: string): int {
+  let count = 0;
+  for (const result of results) {
+    if (result.status == status) {
+      count++;
+    }
+  }
+  return count;
+}
+
+function checkMockOutcome(actual: MockOutcomeSource, status: string, negated: boolean, location: TestLocation): void {
+  const count = mockOutcomeCount(mockOutcomeSnapshot(actual, location), status);
+  let verb = "returned";
+  if (status == "throw") {
+    verb = "thrown";
+  }
+  if ((count > 0) == negated) {
+    if (negated) {
+      throw new FailureError(fmt.Errorf("expected mock not to have %s, got %d %s outcome(s)", verb, count, status), location);
+    }
+    throw new FailureError(fmt.Errorf("expected mock to have %s, got no %s outcomes", verb, status), location);
+  }
+}
+
+function checkMockOutcomeTimes(actual: MockOutcomeSource, status: string, expected: int, negated: boolean, location: TestLocation): void {
+  if (expected < 0) {
+    throw new FailureError(fmt.Errorf("expected mock %s count must not be negative", status), location);
+  }
+  const count = mockOutcomeCount(mockOutcomeSnapshot(actual, location), status);
+  let verb = "returned";
+  if (status == "throw") {
+    verb = "thrown";
+  }
+  if ((count == expected) == negated) {
+    if (negated) {
+      throw new FailureError(fmt.Errorf("expected mock not to have %s %d time(s), got %d", verb, expected, count), location);
+    }
+    throw new FailureError(fmt.Errorf("expected mock to have %s %d time(s), got %d", verb, expected, count), location);
+  }
+}
+
+function checkMockOutcomeMessage(actual: MockOutcomeSource, index: int, fragment: string, last: boolean, negated: boolean, location: TestLocation): void {
+  if (!last && index < 1) {
+    throw new FailureError(errors.New("mock call index must be at least 1"), location);
+  }
+  if (fragment == "") {
+    throw new FailureError(errors.New("expected mock error fragment must not be empty"), location);
+  }
+  const results = mockOutcomeSnapshot(actual, location);
+  let name = fmt.Sprintf("call %d", index);
+  if (last) {
+    index = len(results);
+    name = "last call";
+  }
+  const present = index > 0 && index <= len(results);
+  let message = "";
+  let threw = false;
+  if (present && results[index - 1].status == "throw") {
+    threw = true;
+    if (results[index - 1].exception != nil) {
+      message = results[index - 1].exception.Error();
+    }
+  }
+  const matches = threw && strings.Contains(message, fragment);
+  if (matches == negated) {
+    if (negated) {
+      throw new FailureError(fmt.Errorf("expected mock %s not to have thrown containing %q, got %q", name, fragment, message), location);
+    }
+    if (!present) {
+      throw new FailureError(fmt.Errorf("expected mock %s to throw containing %q, got %d call(s)", name, fragment, len(results)), location);
+    }
+    if (!threw) {
+      throw new FailureError(fmt.Errorf("expected mock %s to throw containing %q, got status %q", name, fragment, results[index - 1].status), location);
+    }
+    throw new FailureError(fmt.Errorf("expected mock %s to throw containing %q, got %q", name, fragment, message), location);
+  }
+}
+
+struct MockThrownSelection {
+  name: string;
+  calls: int;
+  present: boolean;
+  status: string;
+  exception: error;
+}
+
+function selectMockThrown(actual: MockOutcomeSource, index: int, last: boolean, location: TestLocation): MockThrownSelection {
+  if (!last && index < 1) {
+    throw new FailureError(errors.New("mock call index must be at least 1"), location);
+  }
+  const results = mockOutcomeSnapshot(actual, location);
+  let name = fmt.Sprintf("call %d", index);
+  if (last) {
+    index = len(results);
+    name = "last call";
+  }
+  const present = index > 0 && index <= len(results);
+  let status = "";
+  let exception: error = nil;
+  if (present) {
+    status = results[index - 1].status;
+    exception = results[index - 1].exception;
+  }
+  return MockThrownSelection { name: name, calls: len(results), present: present, status: status, exception: exception };
+}
+
+function requireMockThrown(selected: MockThrownSelection, location: TestLocation): void {
+  if (!selected.present) {
+    throw new FailureError(fmt.Errorf("expected mock %s to throw, got %d call(s)", selected.name, selected.calls), location);
+  }
+  if (selected.status != "throw") {
+    throw new FailureError(fmt.Errorf("expected mock %s to throw, got status %q", selected.name, selected.status), location);
+  }
+}
+
+function checkMockThrownPredicate(actual: MockOutcomeSource, predicate: (exception: error) => boolean, negated: boolean, location: TestLocation): void {
+  if (predicate == nil) {
+    throw new FailureError(errors.New("mock throw predicate must not be nil"), location);
+  }
+  const results = mockOutcomeSnapshot(actual, location);
+  let checked = 0;
+  let matches = false;
+  for (const result of results) {
+    if (result.status == "throw") {
+      checked++;
+      if (predicate(result.exception)) {
+        matches = true;
+        break;
+      }
+    }
+  }
+  if (matches == negated) {
+    let qualifier = "";
+    if (negated) {
+      qualifier = "not ";
+    }
+    throw new FailureError(fmt.Errorf("expected mock %sto have a thrown error satisfying predicate, checked %d thrown error(s) across %d call(s)", qualifier, checked, len(results)), location);
+  }
+}
+
+function checkMockIndexedThrownPredicate(actual: MockOutcomeSource, index: int, predicate: (exception: error) => boolean, last: boolean, negated: boolean, location: TestLocation): void {
+  if (predicate == nil) {
+    throw new FailureError(errors.New("mock throw predicate must not be nil"), location);
+  }
+  const selected = selectMockThrown(actual, index, last, location);
+  if (!negated) {
+    requireMockThrown(selected, location);
+  }
+  const matches = selected.present && selected.status == "throw" && predicate(selected.exception);
+  if (matches == negated) {
+    let qualifier = "";
+    if (negated) {
+      qualifier = "not ";
+    }
+    throw new FailureError(fmt.Errorf("expected mock %s %sto have thrown an error satisfying predicate", selected.name, qualifier), location);
+  }
+}
+
+function checkedMockThrownPredicateType<T>(predicate: (value: T) => boolean, matcher: string, location: TestLocation): reflect.Type {
+  if (predicate == nil) {
+    throw new FailureError(fmt.Errorf("%s predicate must not be nil", matcher), location);
+  }
+  try {
+    return checkedErrorMatchType<T>(matcher);
+  } catch (err: error) {
+    throw new FailureError(err, location);
+  }
+}
+
+function checkMockThrownTypePredicate<T>(actual: MockOutcomeSource, predicate: (value: T) => boolean, negated: boolean, location: TestLocation): void {
+  const targetType = checkedMockThrownPredicateType<T>(predicate, "toHaveThrownTypeSatisfying", location);
+  const results = mockOutcomeSnapshot(actual, location);
+  let checked = 0;
+  let matches = false;
+  for (const result of results) {
+    if (result.status == "throw") {
+      checked++;
+      if (errorTypeSatisfies<T>(result.exception, predicate, targetType)) {
+        matches = true;
+        break;
+      }
+    }
+  }
+  if (matches == negated) {
+    let qualifier = "";
+    if (negated) {
+      qualifier = "not ";
+    }
+    throw new FailureError(fmt.Errorf("expected mock %sto have thrown a value assignable to %s satisfying predicate (errors.As), checked %d thrown error(s) across %d call(s)", qualifier, targetType.String(), checked, len(results)), location);
+  }
+}
+
+function checkMockIndexedThrownTypePredicate<T>(actual: MockOutcomeSource, index: int, predicate: (value: T) => boolean, last: boolean, negated: boolean, location: TestLocation): void {
+  let matcher = "toHaveNthThrownTypeSatisfying";
+  if (last) {
+    matcher = "toHaveLastThrownTypeSatisfying";
+  }
+  const targetType = checkedMockThrownPredicateType<T>(predicate, matcher, location);
+  const selected = selectMockThrown(actual, index, last, location);
+  if (!negated) {
+    requireMockThrown(selected, location);
+  }
+  const matches = selected.present && selected.status == "throw" && errorTypeSatisfies<T>(selected.exception, predicate, targetType);
+  if (matches == negated) {
+    let qualifier = "";
+    if (negated) {
+      qualifier = "not ";
+    }
+    throw new FailureError(fmt.Errorf("expected mock %s %sto have thrown a value assignable to %s satisfying predicate (errors.As)", selected.name, qualifier, targetType.String()), location);
+  }
+}
+
+function checkMockOutcomeCause(actual: MockOutcomeSource, index: int, target: error, last: boolean, negated: boolean, location: TestLocation): void {
+  const selected = selectMockThrown(actual, index, last, location);
+  if (!negated) {
+    requireMockThrown(selected, location);
+  }
+  const matches = selected.present && selected.status == "throw" && errors.Is(selected.exception, target);
+  if (matches == negated) {
+    if (negated) {
+      throw new FailureError(fmt.Errorf("expected mock %s not to have thrown matching %v (errors.Is)", selected.name, target), location);
+    }
+    throw new FailureError(fmt.Errorf("expected mock %s to have thrown matching %v (errors.Is)", selected.name, target), location);
+  }
+}
+
+function checkMockOutcomeType<T>(actual: MockOutcomeSource, index: int, target: *T, last: boolean, matcher: string, location: TestLocation): void {
+  try {
+    validateErrorDestination<T>(target, matcher);
+  } catch (err: error) {
+    throw new FailureError(err, location);
+  }
+  const selected = selectMockThrown(actual, index, last, location);
+  requireMockThrown(selected, location);
+  if (!errors.As(selected.exception, target)) {
+    throw new FailureError(fmt.Errorf("expected mock %s to have thrown a value assignable to %s (errors.As)", selected.name, reflect.ValueOf(target).Elem().Type().String()), location);
+  }
+}
+
+function checkMockOutcomeNotType<T>(actual: MockOutcomeSource, index: int, last: boolean, matcher: string, location: TestLocation): void {
+  let targetType: reflect.Type = nil;
+  try {
+    targetType = checkedErrorMatchType<T>(matcher);
+  } catch (err: error) {
+    throw new FailureError(err, location);
+  }
+  const selected = selectMockThrown(actual, index, last, location);
+  const target = reflect.New(targetType);
+  if (selected.present && selected.status == "throw" && errors.As(selected.exception, target.Interface())) {
+    throw new FailureError(fmt.Errorf("expected mock %s not to have thrown a value assignable to %s (errors.As)", selected.name, targetType.String()), location);
+  }
+}
+
+struct Cleanup {
+  body: () => void;
+}
+
+export class TestContext {
+  private register: (body: () => void) => void;
+
+  constructor(register: (body: () => void) => void) {
+    if (register == nil) {
+      throw errors.New("cleanup registrar must not be nil");
+    }
+    this.register = register;
+  }
+
+  public function cleanup(body: () => void): void {
+    this.register(body);
+  }
+
+  public function tempDir(): string {
+    let path = "";
+    // Register first so a closed context cannot create an unowned resource.
+    this.cleanup((): void => {
+      if (path != "") {
+        const cleanupError = os.RemoveAll(path);
+        if (cleanupError != nil) {
+          throw fmt.Errorf("temporary directory cleanup failed: %w", cleanupError);
+        }
+      }
+    });
+    const [created, createError] = os.MkdirTemp("", "vasest-*");
+    if (createError != nil) {
+      throw fmt.Errorf("cannot create temporary directory: %w", createError);
+    }
+    path = created;
+    return path;
+  }
+
+  public function setEnv(name: string, value: string): void {
+    const [previous, existed] = os.LookupEnv(name);
+    let changed = false;
+    this.cleanup((): void => {
+      if (changed) {
+        let restoreError: error = nil;
+        if (existed) {
+          restoreError = os.Setenv(name, previous);
+        } else {
+          restoreError = os.Unsetenv(name);
+        }
+        if (restoreError != nil) {
+          throw fmt.Errorf("environment variable %q restore failed: %w", name, restoreError);
+        }
+      }
+    });
+    const setError = os.Setenv(name, value);
+    if (setError != nil) {
+      throw fmt.Errorf("cannot set environment variable %q: %w", name, setError);
+    }
+    changed = true;
+  }
+}
+
+class CleanupScope {
+  private pending: Cleanup[];
+  private closed: boolean;
+
+  constructor() {
+    this.pending = [];
+    this.closed = false;
+  }
+
+  public function context(): TestContext {
+    return new TestContext((body: () => void): void => {
+      if (body == nil) {
+        throw errors.New("cleanup body must not be nil");
+      }
+      if (this.closed) {
+        throw errors.New("test context is already closed");
+      }
+      this.pending = append(this.pending, Cleanup { body: body });
+    });
+  }
+
+  public function drain(): TestFailure[] {
+    let failures: TestFailure[] = [];
+    try {
+      while (len(this.pending) > 0) {
+        const index = len(this.pending) - 1;
+        const cleanup = this.pending[index];
+        this.pending[index] = Cleanup { body: nil };
+        this.pending = this.pending[:index];
+        try {
+          cleanup.body();
+        } catch (err: error) {
+          failures = append(failures, failureDetail("cleanup", err));
+        }
+      }
+    } finally {
+      try {
+        // A native panic still unwinds the remaining registered callbacks.
+        if (len(this.pending) > 0) {
+          const remaining = this.drain();
+          for (const failure of remaining) {
+            failures = append(failures, failure);
+          }
+        }
+      } finally {
+        this.closed = true;
+      }
+    }
+    return failures;
+  }
+}
+
+struct FixtureInvocation {
+  body: () => void;
+}
+
+struct TestCase {
+  name: string;
+  body: () => void;
+  contextBody: (context: TestContext) => void;
+  fixtureBody: (context: TestContext) => FixtureInvocation;
+  kind: string;
+}
+
+struct IndexedTestRow<T> {
+  value: T;
+  index: int;
+}
+
+function indexedTestRows<T>(values: T[]): IndexedTestRow<T>[] {
+  let rows: IndexedTestRow<T>[] = [];
+  let index = 0;
+  for (const value of values) {
+    rows = append(rows, IndexedTestRow<T> { value: value, index: index });
+    index++;
+  }
+  return rows;
+}
+
+function failureMessage(failures: TestFailure[]): string {
+  let message = "";
+  for (const failure of failures) {
+    if (message != "") {
+      message += "; ";
+    }
+    if (failure.phase == "afterEach" || failure.phase == "cleanup") {
+      message += failure.phase + ": ";
+    }
+    message += failure.message;
+  }
+  return message;
+}
+
+function writeFailureDetails(writer: io.Writer, failures: TestFailure[]): void {
+  const concise = len(failures) == 1 && failures[0].phase == "body" && failures[0].message != "";
+  for (const failure of failures) {
+    let message = failure.message;
+    if (message == "") {
+      message = "(empty error message)";
+    }
+    if (!concise) {
+      fmt.Fprintf(writer, "  [%s] %s\n", failure.phase, message);
+    }
+    if (failure.location.line > 0) {
+      fmt.Fprintf(writer, "    at %s:%d (%s)\n", failure.location.file, failure.location.line, failure.location.source);
+    }
+  }
+}
+
+export struct TestResult {
+  public name: string;
+  public passed: boolean;
+  public message: string;
+  public status: string;
+  public durationNs: int64;
+  public failures: TestFailure[];
+}
+
+function failedResult(name: string, message: string, durationNs: int64, failures: TestFailure[]): TestResult {
+  let result = TestResult { name: name, passed: false, message: message, status: "fail", durationNs: durationNs, failures: [] };
+  for (const failure of failures) {
+    result.failures = append(result.failures, failure);
+  }
+  return result;
+}
+
+export struct Summary {
+  public suite: string;
+  public failOnTodo: boolean;
+  public passed: int;
+  public failed: int;
+  public skipped: int;
+  public todo: int;
+  public durationNs: int64;
+  public results: TestResult[];
+
+  public function total(): int {
+    return this.passed + this.failed;
+  }
+
+  public function success(): boolean {
+    return (this.total() > 0 || this.skipped > 0 || this.todo > 0) && this.failed == 0 && !(this.failOnTodo && this.todo > 0);
+  }
+
+  public function exitCode(): int {
+    if (this.success()) {
+      return 0;
+    }
+    return 1;
+  }
+}
+
+export class Suite {
+  private name: string;
+  private cases: TestCase[];
+  private before: () => void;
+  private after: () => void;
+  private beforeContext: (context: TestContext) => void;
+  private afterContext: (context: TestContext) => void;
+  private beforeSuite: () => void;
+  private beforeSuiteContext: (context: TestContext) => void;
+  private afterSuite: () => void;
+
+  constructor(name: string) {
+    if (strings.TrimSpace(name) == "") {
+      throw errors.New("suite name must not be empty");
+    }
+    if (!utf8.ValidString(name)) {
+      throw errors.New("suite name must be valid UTF-8");
+    }
+    this.name = name;
+    this.cases = [];
+    this.before = nil;
+    this.after = nil;
+    this.beforeContext = nil;
+    this.afterContext = nil;
+    this.beforeSuite = nil;
+    this.beforeSuiteContext = nil;
+    this.afterSuite = nil;
+  }
+
+  public function beforeAll(body: () => void): void {
+    if (body == nil) {
+      throw errors.New("beforeAll body must not be nil");
+    }
+    this.beforeSuite = body;
+    this.beforeSuiteContext = nil;
+  }
+
+  public function beforeAllWithContext(body: (context: TestContext) => void): void {
+    if (body == nil) {
+      throw errors.New("beforeAllWithContext body must not be nil");
+    }
+    this.beforeSuiteContext = body;
+    this.beforeSuite = nil;
+  }
+
+  public function afterAll(body: () => void): void {
+    if (body == nil) {
+      throw errors.New("afterAll body must not be nil");
+    }
+    this.afterSuite = body;
+  }
+
+  public function beforeEach(body: () => void): void {
+    if (body == nil) {
+      throw errors.New("beforeEach body must not be nil");
+    }
+    this.before = body;
+    this.beforeContext = nil;
+  }
+
+  public function beforeEachWithContext(body: (context: TestContext) => void): void {
+    if (body == nil) {
+      throw errors.New("beforeEachWithContext body must not be nil");
+    }
+    this.beforeContext = body;
+    this.before = nil;
+  }
+
+  public function afterEach(body: () => void): void {
+    if (body == nil) {
+      throw errors.New("afterEach body must not be nil");
+    }
+    this.after = body;
+    this.afterContext = nil;
+  }
+
+  public function afterEachWithContext(body: (context: TestContext) => void): void {
+    if (body == nil) {
+      throw errors.New("afterEachWithContext body must not be nil");
+    }
+    this.afterContext = body;
+    this.after = nil;
+  }
+
+  public function test(name: string, body: () => void): void {
+    this.addCase(name, body, nil, nil, "run");
+  }
+
+  public function testWithContext(name: string, body: (context: TestContext) => void): void {
+    if (body == nil) {
+      throw errors.New("testWithContext body must not be nil");
+    }
+    this.addCase(name, nil, body, nil, "run");
+  }
+
+  public function testWithFixture<T>(name: string, setup: (context: TestContext) => T, body: (value: T, context: TestContext) => void): void {
+    if (setup == nil) {
+      throw errors.New("testWithFixture setup must not be nil");
+    }
+    if (body == nil) {
+      throw errors.New("testWithFixture body must not be nil");
+    }
+    this.addCase(name, nil, nil, (context: TestContext): FixtureInvocation => {
+      const value = setup(context);
+      return FixtureInvocation { body: (): void => { body(value, context); } };
+    }, "run");
+  }
+
+  public function skip(name: string, body: () => void): void {
+    this.addCase(name, body, nil, nil, "skip");
+  }
+
+  public function todo(name: string): void {
+    this.addCase(name, nil, nil, nil, "todo");
+  }
+
+  public function skipEach<T>(values: T[], nameOf: (value: T) => string, body: (value: T) => void): void {
+    if (nameOf == nil) {
+      throw errors.New("skipEach name callback must not be nil");
+    }
+    if (body == nil) {
+      throw errors.New("skipEach body must not be nil");
+    }
+    if (len(values) == 0) {
+      throw errors.New("skipEach requires at least one value");
+    }
+    const names = this.tableNames<T>(values, nameOf);
+    let index = 0;
+    for (const value of values) {
+      const caseValue = value;
+      this.skip(names[index], (): void => { body(caseValue); });
+      index++;
+    }
+  }
+
+  public function todoEach<T>(values: T[], nameOf: (value: T) => string): void {
+    if (nameOf == nil) {
+      throw errors.New("todoEach name callback must not be nil");
+    }
+    if (len(values) == 0) {
+      throw errors.New("todoEach requires at least one value");
+    }
+    const names = this.tableNames<T>(values, nameOf);
+    for (const name of names) {
+      this.todo(name);
+    }
+  }
+
+  public function skipEachIndexed<T>(values: T[], nameOf: (value: T, index: int) => string, body: (value: T, index: int) => void): void {
+    if (nameOf == nil) {
+      throw errors.New("skipEachIndexed name callback must not be nil");
+    }
+    if (body == nil) {
+      throw errors.New("skipEachIndexed body must not be nil");
+    }
+    if (len(values) == 0) {
+      throw errors.New("skipEachIndexed requires at least one value");
+    }
+    this.skipEach<IndexedTestRow<T>>(indexedTestRows<T>(values), (row: IndexedTestRow<T>): string => {
+      return nameOf(row.value, row.index);
+    }, (row: IndexedTestRow<T>): void => { body(row.value, row.index); });
+  }
+
+  public function todoEachIndexed<T>(values: T[], nameOf: (value: T, index: int) => string): void {
+    if (nameOf == nil) {
+      throw errors.New("todoEachIndexed name callback must not be nil");
+    }
+    if (len(values) == 0) {
+      throw errors.New("todoEachIndexed requires at least one value");
+    }
+    this.todoEach<IndexedTestRow<T>>(indexedTestRows<T>(values), (row: IndexedTestRow<T>): string => {
+      return nameOf(row.value, row.index);
+    });
+  }
+
+  private function addCase(name: string, body: () => void, contextBody: (context: TestContext) => void, fixtureBody: (context: TestContext) => FixtureInvocation, kind: string): void {
+    if (strings.TrimSpace(name) == "") {
+      throw errors.New("test name must not be empty");
+    }
+    if (!utf8.ValidString(name)) {
+      throw errors.New("test name must be valid UTF-8");
+    }
+    if (kind == "run" && body == nil && contextBody == nil && fixtureBody == nil) {
+      throw errors.New("test body must not be nil");
+    }
+    if (kind == "skip" && body == nil) {
+      throw errors.New("skip body must not be nil");
+    }
+    for (const existing of this.cases) {
+      if (existing.name == name) {
+        throw fmt.Errorf("duplicate test name %q", name);
+      }
+    }
+    this.cases = append(this.cases, TestCase { name: name, body: body, contextBody: contextBody, fixtureBody: fixtureBody, kind: kind });
+  }
+
+  public function testEach<T>(values: T[], nameOf: (value: T) => string, body: (value: T) => void): void {
+    if (nameOf == nil) {
+      throw errors.New("testEach name callback must not be nil");
+    }
+    if (body == nil) {
+      throw errors.New("testEach body must not be nil");
+    }
+    if (len(values) == 0) {
+      throw errors.New("testEach requires at least one value");
+    }
+    const names = this.tableNames(values, nameOf);
+    let index = 0;
+    for (const value of values) {
+      const name = names[index];
+      const caseValue = value;
+      this.test(name, (): void => {
+        body(caseValue);
+      });
+      index++;
+    }
+  }
+
+  public function testEachWithContext<T>(values: T[], nameOf: (value: T) => string, body: (value: T, context: TestContext) => void): void {
+    if (nameOf == nil) {
+      throw errors.New("testEachWithContext name callback must not be nil");
+    }
+    if (body == nil) {
+      throw errors.New("testEachWithContext body must not be nil");
+    }
+    if (len(values) == 0) {
+      throw errors.New("testEachWithContext requires at least one value");
+    }
+    const names = this.tableNames(values, nameOf);
+    let index = 0;
+    for (const value of values) {
+      const name = names[index];
+      const caseValue = value;
+      this.testWithContext(name, (context: TestContext): void => {
+        body(caseValue, context);
+      });
+      index++;
+    }
+  }
+
+  public function testEachWithFixture<T, F>(values: T[], nameOf: (value: T) => string, setup: (value: T, context: TestContext) => F, body: (value: T, fixture: F, context: TestContext) => void): void {
+    if (nameOf == nil) {
+      throw errors.New("testEachWithFixture name callback must not be nil");
+    }
+    if (setup == nil) {
+      throw errors.New("testEachWithFixture setup must not be nil");
+    }
+    if (body == nil) {
+      throw errors.New("testEachWithFixture body must not be nil");
+    }
+    if (len(values) == 0) {
+      throw errors.New("testEachWithFixture requires at least one value");
+    }
+    const names = this.tableNames(values, nameOf);
+    let index = 0;
+    for (const value of values) {
+      const name = names[index];
+      const caseValue = value;
+      this.testWithFixture(name, (context: TestContext): F => {
+        return setup(caseValue, context);
+      }, (fixture: F, context: TestContext): void => {
+        body(caseValue, fixture, context);
+      });
+      index++;
+    }
+  }
+
+  public function testEachIndexed<T>(values: T[], nameOf: (value: T, index: int) => string, body: (value: T, index: int) => void): void {
+    if (nameOf == nil) {
+      throw errors.New("testEachIndexed name callback must not be nil");
+    }
+    if (body == nil) {
+      throw errors.New("testEachIndexed body must not be nil");
+    }
+    if (len(values) == 0) {
+      throw errors.New("testEachIndexed requires at least one value");
+    }
+    this.testEach<IndexedTestRow<T>>(indexedTestRows<T>(values), (row: IndexedTestRow<T>): string => {
+      return nameOf(row.value, row.index);
+    }, (row: IndexedTestRow<T>): void => {
+      body(row.value, row.index);
+    });
+  }
+
+  public function testEachIndexedWithContext<T>(values: T[], nameOf: (value: T, index: int) => string, body: (value: T, index: int, context: TestContext) => void): void {
+    if (nameOf == nil) {
+      throw errors.New("testEachIndexedWithContext name callback must not be nil");
+    }
+    if (body == nil) {
+      throw errors.New("testEachIndexedWithContext body must not be nil");
+    }
+    if (len(values) == 0) {
+      throw errors.New("testEachIndexedWithContext requires at least one value");
+    }
+    this.testEachWithContext<IndexedTestRow<T>>(indexedTestRows<T>(values), (row: IndexedTestRow<T>): string => {
+      return nameOf(row.value, row.index);
+    }, (row: IndexedTestRow<T>, context: TestContext): void => {
+      body(row.value, row.index, context);
+    });
+  }
+
+  public function testEachIndexedWithFixture<T, F>(values: T[], nameOf: (value: T, index: int) => string, setup: (value: T, index: int, context: TestContext) => F, body: (value: T, index: int, fixture: F, context: TestContext) => void): void {
+    if (nameOf == nil) {
+      throw errors.New("testEachIndexedWithFixture name callback must not be nil");
+    }
+    if (setup == nil) {
+      throw errors.New("testEachIndexedWithFixture setup must not be nil");
+    }
+    if (body == nil) {
+      throw errors.New("testEachIndexedWithFixture body must not be nil");
+    }
+    if (len(values) == 0) {
+      throw errors.New("testEachIndexedWithFixture requires at least one value");
+    }
+    this.testEachWithFixture<IndexedTestRow<T>, F>(indexedTestRows<T>(values), (row: IndexedTestRow<T>): string => {
+      return nameOf(row.value, row.index);
+    }, (row: IndexedTestRow<T>, context: TestContext): F => {
+      return setup(row.value, row.index, context);
+    }, (row: IndexedTestRow<T>, fixture: F, context: TestContext): void => {
+      body(row.value, row.index, fixture, context);
+    });
+  }
+
+  private function tableNames<T>(values: T[], nameOf: (value: T) => string): string[] {
+    let names: string[] = [];
+    for (const value of values) {
+      const name = nameOf(value);
+      if (strings.TrimSpace(name) == "") {
+        throw errors.New("test name must not be empty");
+      }
+      if (!utf8.ValidString(name)) {
+        throw errors.New("test name must be valid UTF-8");
+      }
+      for (const existing of this.cases) {
+        if (existing.name == name) {
+          throw fmt.Errorf("duplicate test name %q", name);
+        }
+      }
+      for (const staged of names) {
+        if (staged == name) {
+          throw fmt.Errorf("duplicate test name %q", name);
+        }
+      }
+      names = append(names, name);
+    }
+    // Naming callbacks can register cases; validate the final state before
+    // committing any row from this batch.
+    for (const name of names) {
+      for (const existing of this.cases) {
+        if (existing.name == name) {
+          throw fmt.Errorf("duplicate test name %q", name);
+        }
+      }
+    }
+    return names;
+  }
+
+  public function run(): Summary {
+    return this.runTo(os.Stdout);
+  }
+
+  public function runAndExit(): void {
+    if (!this.run().success()) {
+      markFailedSuiteExit();
+      os.Exit(1);
+    }
+  }
+
+  public function runTo(writer: io.Writer): Summary {
+    const suiteStarted = time.Now();
+    let result = Summary {
+      suite: this.name,
+      failOnTodo: os.Getenv("VASEST_FAIL_ON_TODO") == "1",
+      passed: 0,
+      failed: 0,
+      skipped: 0,
+      todo: 0,
+      durationNs: 0,
+      results: [],
+    };
+    const filter = os.Getenv("VASEST_FILTER");
+    const rerunText = os.Getenv("VASEST_RERUN_SELECTION");
+    let rerun = RerunSelection { all: true, suites: [] };
+    if (rerunText != "") {
+      rerun = readRerunSelection(rerunText);
+    }
+    const bail = os.Getenv("VASEST_BAIL") == "1";
+    let selected: TestCase[] = [];
+    for (const testCase of this.cases) {
+      if ((filter != "" && !strings.Contains(testCase.name, filter)) || !matchesRerun(rerun, this.name, testCase.name)) {
+        result.skipped++;
+        continue;
+      }
+      selected = append(selected, testCase);
+    }
+    const shuffleText = os.Getenv("VASEST_SHUFFLE_SEED");
+    if (shuffleText != "") {
+      const [seed, parseError] = strconv.ParseInt(shuffleText, 10, 64);
+      if (parseError != nil || seed < 0) {
+        throw fmt.Errorf("invalid shuffle seed %q", shuffleText);
+      }
+      const random = rand.New(rand.NewSource(seed));
+      for (let index = len(selected) - 1; index > 0; index--) {
+        const other = random.Intn(index + 1);
+        const current = selected[index];
+        selected[index] = selected[other];
+        selected[other] = current;
+      }
+    }
+    let hasRunnable = false;
+    for (const testCase of selected) {
+      if (testCase.kind == "run") {
+        hasRunnable = true;
+      }
+    }
+    if (len(selected) > 0) {
+      const suiteCleanup = new CleanupScope();
+      let beforeFailure = "";
+      let beforeLocation = emptyLocation();
+      let beforeFailed = false;
+      let beforeSkip = "";
+      let beforeDuration: int64 = 0;
+      let bailed = false;
+      try {
+        if (hasRunnable && (this.beforeSuite != nil || this.beforeSuiteContext != nil)) {
+          const beforeStarted = time.Now();
+          try {
+            if (this.beforeSuiteContext != nil) {
+              this.beforeSuiteContext(suiteCleanup.context());
+            } else {
+              this.beforeSuite();
+            }
+          } catch (err: error) {
+            beforeSkip = testSkipReason(err);
+            if (beforeSkip == "") {
+              beforeFailed = true;
+              beforeFailure = err.Error();
+              beforeLocation = failureLocation(err);
+            }
+          }
+          beforeDuration = time.Since(beforeStarted).Nanoseconds();
+        }
+        if (beforeFailed) {
+          result.failed++;
+          const failures = [TestFailure { phase: "beforeAll", message: beforeFailure, location: beforeLocation }];
+          result.results = append(result.results, failedResult("<beforeAll>", beforeFailure, beforeDuration, failures));
+          fmt.Fprintf(writer, "FAIL %s / beforeAll: %s\n", this.name, beforeFailure);
+          writeFailureDetails(writer, failures);
+        }
+        for (const testCase of selected) {
+          if (filter != "" || rerunText != "") {
+            recordMatch();
+          }
+          if (bailed) {
+            result.skipped++;
+            result.results = append(result.results, TestResult { name: testCase.name, passed: false, message: "not run after failure (--bail)", status: "skip", durationNs: 0, failures: [] });
+            fmt.Fprintf(writer, "SKIP %s / %s: not run after failure (--bail)\n", this.name, testCase.name);
+            continue;
+          }
+          if (testCase.kind == "skip") {
+            result.skipped++;
+            result.results = append(result.results, TestResult { name: testCase.name, passed: false, message: "", status: "skip", durationNs: 0, failures: [] });
+            fmt.Fprintf(writer, "SKIP %s / %s\n", this.name, testCase.name);
+            continue;
+          }
+          if (testCase.kind == "todo") {
+            result.todo++;
+            result.results = append(result.results, TestResult { name: testCase.name, passed: false, message: "", status: "todo", durationNs: 0, failures: [] });
+            fmt.Fprintf(writer, "TODO %s / %s\n", this.name, testCase.name);
+            continue;
+          }
+          if (beforeSkip != "") {
+            result.skipped++;
+            result.results = append(result.results, TestResult { name: testCase.name, passed: false, message: beforeSkip, status: "skip", durationNs: 0, failures: [] });
+            fmt.Fprintf(writer, "SKIP %s / %s: %s\n", this.name, testCase.name, beforeSkip);
+            continue;
+          }
+          if (beforeFailed) {
+            result.skipped++;
+            result.results = append(result.results, TestResult { name: testCase.name, passed: false, message: "beforeAll failed", status: "skip", durationNs: 0, failures: [] });
+            fmt.Fprintf(writer, "SKIP %s / %s: beforeAll failed\n", this.name, testCase.name);
+            continue;
+          }
+          let failures: TestFailure[] = [];
+          let skippedReason = "";
+          let phase = "beforeEach";
+          const cleanupScope = new CleanupScope();
+          const context = cleanupScope.context();
+          const caseStarted = time.Now();
+          try {
+            withEnv("VASEST_SNAPSHOT_SCOPE", fmt.Sprintf("%q / %q", this.name, testCase.name), (): void => {
+              try {
+                try {
+                  if (this.beforeContext != nil) {
+                    this.beforeContext(context);
+                  } else if (this.before != nil) {
+                    this.before();
+                  }
+                  if (testCase.fixtureBody != nil) {
+                    phase = "fixture";
+                    const invocation = testCase.fixtureBody(context);
+                    phase = "body";
+                    invocation.body();
+                  } else if (testCase.contextBody != nil) {
+                    phase = "body";
+                    testCase.contextBody(context);
+                  } else {
+                    phase = "body";
+                    testCase.body();
+                  }
+                } catch (err: error) {
+                  skippedReason = testSkipReason(err);
+                  if (skippedReason == "") {
+                    failures = append(failures, failureDetail(phase, err));
+                  }
+                }
+              } finally {
+                try {
+                  try {
+                    if (this.afterContext != nil) {
+                      this.afterContext(context);
+                    } else if (this.after != nil) {
+                      this.after();
+                    }
+                  } catch (err: error) {
+                    failures = append(failures, failureDetail("afterEach", err));
+                  }
+                } finally {
+                  const cleanupFailures = cleanupScope.drain();
+                  for (const failure of cleanupFailures) {
+                    failures = append(failures, failure);
+                  }
+                }
+              }
+            });
+          } catch (err: error) {
+            failures = append(failures, failureDetail("fixture", err));
+          }
+          const caseDuration = time.Since(caseStarted).Nanoseconds();
+          if (len(failures) == 0) {
+            if (skippedReason != "") {
+              result.skipped++;
+              result.results = append(result.results, TestResult { name: testCase.name, passed: false, message: skippedReason, status: "skip", durationNs: caseDuration, failures: [] });
+              fmt.Fprintf(writer, "SKIP %s / %s: %s\n", this.name, testCase.name, skippedReason);
+            } else {
+              result.passed++;
+              result.results = append(result.results, TestResult { name: testCase.name, passed: true, message: "", status: "pass", durationNs: caseDuration, failures: [] });
+              fmt.Fprintf(writer, "PASS %s / %s\n", this.name, testCase.name);
+            }
+          } else {
+            result.failed++;
+            const failure = failureMessage(failures);
+            result.results = append(result.results, failedResult(testCase.name, failure, caseDuration, failures));
+            fmt.Fprintf(writer, "FAIL %s / %s: %s\n", this.name, testCase.name, failure);
+            writeFailureDetails(writer, failures);
+            if (bail) {
+              bailed = true;
+            }
+          }
+        }
+      } finally {
+        if (hasRunnable) {
+          const afterStarted = time.Now();
+          let failures: TestFailure[] = [];
+          try {
+            try {
+              if (this.afterSuite != nil) {
+                this.afterSuite();
+              }
+            } catch (err: error) {
+              failures = append(failures, failureDetail("afterAll", err));
+            }
+          } finally {
+            const cleanupFailures = suiteCleanup.drain();
+            for (const failure of cleanupFailures) {
+              failures = append(failures, failure);
+            }
+          }
+          if (len(failures) > 0) {
+            result.failed++;
+            const message = failureMessage(failures);
+            result.results = append(result.results, failedResult("<afterAll>", message, time.Since(afterStarted).Nanoseconds(), failures));
+            fmt.Fprintf(writer, "FAIL %s / afterAll: %s\n", this.name, message);
+            writeFailureDetails(writer, failures);
+          }
+        }
+      }
+    }
+    if (len(this.cases) == 0) {
+      fmt.Fprintf(writer, "FAIL %s: no tests registered\n", this.name);
+    } else if (len(selected) == 0) {
+      if (rerunText != "") {
+        fmt.Fprintf(writer, "SKIP %s: no tests match failure history and filter\n", this.name);
+      } else {
+        fmt.Fprintf(writer, "SKIP %s: no tests match %q\n", this.name, filter);
+      }
+    }
+    result.durationNs = time.Since(suiteStarted).Nanoseconds();
+    fmt.Fprintf(writer, "%d passed, %d failed, %d skipped, %d todo\n", result.passed, result.failed, result.skipped, result.todo);
+    if (result.failOnTodo && result.todo > 0) {
+      fmt.Fprintf(writer, "FAIL %s: todo tests are not allowed (--fail-on-todo)\n", this.name);
+    }
+    writeReport(result);
+    return result;
+  }
+}
+
+struct FixtureValue<T> {
+  value: T;
+  ready: boolean;
+}
+
+class SharedFixtureValue<T> {
+  public result: FixtureValue<T>;
+
+  constructor() {
+    this.result.ready = false;
+  }
+}
+
+export class FixtureSuite<T> {
+  private suite: Suite;
+  private state: SharedFixtureValue<T>;
+  private beforeSuite: (fixture: T) => void;
+  private afterSuite: (fixture: T) => void;
+  private running: boolean;
+
+  constructor(name: string, setup: (context: TestContext) => T) {
+    if (setup == nil) {
+      throw errors.New("fixture suite setup must not be nil");
+    }
+    this.suite = new Suite(name);
+    this.state = new SharedFixtureValue<T>();
+    this.beforeSuite = nil;
+    this.afterSuite = nil;
+    this.running = false;
+    this.suite.beforeAllWithContext((context: TestContext): void => {
+      // Clear the retained value after all user/resource cleanup, including
+      // setup failures and native panics. Each run prepares a fresh value.
+      context.cleanup((): void => {
+        this.state = new SharedFixtureValue<T>();
+      });
+      const value = setup(context);
+      this.state.result.value = value;
+      this.state.result.ready = true;
+      if (this.beforeSuite != nil) {
+        this.beforeSuite(value);
+      }
+    });
+    this.suite.afterAll((): void => {
+      if (this.state.result.ready && this.afterSuite != nil) {
+        this.afterSuite(this.state.result.value);
+      }
+    });
+  }
+
+  public function beforeAll(body: (fixture: T) => void): void {
+    if (body == nil) {
+      throw errors.New("beforeAll body must not be nil");
+    }
+    this.beforeSuite = body;
+  }
+
+  public function afterAll(body: (fixture: T) => void): void {
+    if (body == nil) {
+      throw errors.New("afterAll body must not be nil");
+    }
+    this.afterSuite = body;
+  }
+
+  public function beforeEach(body: (fixture: T) => void): void {
+    if (body == nil) {
+      throw errors.New("beforeEach body must not be nil");
+    }
+    this.suite.beforeEach((): void => { body(this.state.result.value); });
+  }
+
+  public function beforeEachWithContext(body: (fixture: T, context: TestContext) => void): void {
+    if (body == nil) {
+      throw errors.New("beforeEachWithContext body must not be nil");
+    }
+    this.suite.beforeEachWithContext((context: TestContext): void => { body(this.state.result.value, context); });
+  }
+
+  public function afterEach(body: (fixture: T) => void): void {
+    if (body == nil) {
+      throw errors.New("afterEach body must not be nil");
+    }
+    this.suite.afterEach((): void => { body(this.state.result.value); });
+  }
+
+  public function afterEachWithContext(body: (fixture: T, context: TestContext) => void): void {
+    if (body == nil) {
+      throw errors.New("afterEachWithContext body must not be nil");
+    }
+    this.suite.afterEachWithContext((context: TestContext): void => { body(this.state.result.value, context); });
+  }
+
+  public function test(name: string, body: (fixture: T, context: TestContext) => void): void {
+    if (body == nil) {
+      throw errors.New("test body must not be nil");
+    }
+    this.suite.testWithContext(name, (context: TestContext): void => {
+      body(this.state.result.value, context);
+    });
+  }
+
+  public function testEach<R>(values: R[], nameOf: (value: R) => string, body: (value: R, fixture: T, context: TestContext) => void): void {
+    if (nameOf == nil) {
+      throw errors.New("testEach name callback must not be nil");
+    }
+    if (body == nil) {
+      throw errors.New("testEach body must not be nil");
+    }
+    if (len(values) == 0) {
+      throw errors.New("testEach requires at least one value");
+    }
+    this.suite.testEachWithContext(values, nameOf, (value: R, context: TestContext): void => {
+      body(value, this.state.result.value, context);
+    });
+  }
+
+  public function testEachIndexed<R>(values: R[], nameOf: (value: R, index: int) => string, body: (value: R, index: int, fixture: T, context: TestContext) => void): void {
+    if (nameOf == nil) {
+      throw errors.New("testEachIndexed name callback must not be nil");
+    }
+    if (body == nil) {
+      throw errors.New("testEachIndexed body must not be nil");
+    }
+    if (len(values) == 0) {
+      throw errors.New("testEachIndexed requires at least one value");
+    }
+    this.suite.testEachIndexedWithContext<R>(values, nameOf, (value: R, index: int, context: TestContext): void => {
+      body(value, index, this.state.result.value, context);
+    });
+  }
+
+  public function skip(name: string, body: (fixture: T, context: TestContext) => void): void {
+    if (body == nil) {
+      throw errors.New("skip body must not be nil");
+    }
+    this.suite.skip(name, (): void => {});
+  }
+
+  public function todo(name: string): void {
+    this.suite.todo(name);
+  }
+
+  public function skipEach<R>(values: R[], nameOf: (value: R) => string, body: (value: R, fixture: T, context: TestContext) => void): void {
+    if (nameOf == nil) {
+      throw errors.New("skipEach name callback must not be nil");
+    }
+    if (body == nil) {
+      throw errors.New("skipEach body must not be nil");
+    }
+    this.suite.skipEach<R>(values, nameOf, (value: R): void => {});
+  }
+
+  public function todoEach<R>(values: R[], nameOf: (value: R) => string): void {
+    this.suite.todoEach<R>(values, nameOf);
+  }
+
+  public function skipEachIndexed<R>(values: R[], nameOf: (value: R, index: int) => string, body: (value: R, index: int, fixture: T, context: TestContext) => void): void {
+    if (nameOf == nil) {
+      throw errors.New("skipEachIndexed name callback must not be nil");
+    }
+    if (body == nil) {
+      throw errors.New("skipEachIndexed body must not be nil");
+    }
+    this.suite.skipEachIndexed<R>(values, nameOf, (value: R, index: int): void => {});
+  }
+
+  public function todoEachIndexed<R>(values: R[], nameOf: (value: R, index: int) => string): void {
+    this.suite.todoEachIndexed<R>(values, nameOf);
+  }
+
+  public function run(): Summary {
+    return this.runTo(os.Stdout);
+  }
+
+  public function runAndExit(): void {
+    if (!this.run().success()) {
+      markFailedSuiteExit();
+      os.Exit(1);
+    }
+  }
+
+  public function runTo(writer: io.Writer): Summary {
+    if (this.running) {
+      throw errors.New("fixture suite is already running");
+    }
+    this.running = true;
+    try {
+      return this.suite.runTo(writer);
+    } finally {
+      this.running = false;
+    }
+  }
+}
+
+function writeReport(summary: Summary): void {
+  const path = os.Getenv("VASEST_REPORT_PATH");
+  if (path == "") {
+    return;
+  }
+  const [encoded, encodeError] = json.Marshal(summary);
+  if (encodeError != nil) {
+    throw fmt.Errorf("cannot encode test report: %w", encodeError);
+  }
+  const [file, openError] = os.OpenFile(path, os.O_APPEND | os.O_WRONLY, 0600);
+  if (openError != nil) {
+    throw fmt.Errorf("cannot open test report: %w", openError);
+  }
+  const [written, writeError] = fmt.Fprintf(file, "{\"success\":%t,\"summary\":%s}\n", summary.success(), string(encoded));
+  const closeError = file.Close();
+  if (writeError != nil) {
+    throw fmt.Errorf("cannot write test report: %w", writeError);
+  }
+  if (closeError != nil) {
+    throw fmt.Errorf("cannot close test report: %w", closeError);
+  }
+}
+
+export function runSuiteAndExit(name: string, register: (suite: Suite) => void): void {
+  if (register == nil) {
+    throw errors.New("suite registration body must not be nil");
+  }
+  const suite = new Suite(name);
+  register(suite);
+  suite.runAndExit();
+}
+
+export function withTempDir(body: (path: string) => void): void {
+  if (body == nil) {
+    throw errors.New("withTempDir body must not be nil");
+  }
+  const [path, createError] = os.MkdirTemp("", "vasest-*");
+  if (createError != nil) {
+    throw createError;
+  }
+  let bodyFailed = false;
+  let bodyError: error = nil;
+  let cleanupError: error = nil;
+  try {
+    try {
+      body(path);
+    } catch (err: error) {
+      bodyFailed = true;
+      bodyError = err;
+    }
+  } finally {
+    cleanupError = os.RemoveAll(path);
+  }
+  if (cleanupError != nil) {
+    if (bodyFailed) {
+      throw fmt.Errorf("%v; temporary directory cleanup failed: %w", bodyError, cleanupError);
+    }
+    throw fmt.Errorf("temporary directory cleanup failed: %w", cleanupError);
+  }
+  if (bodyFailed) {
+    throw bodyError;
+  }
+}
+
+export function withEnv(name: string, value: string, body: () => void): void {
+  if (body == nil) {
+    throw errors.New("withEnv body must not be nil");
+  }
+  const [previous, existed] = os.LookupEnv(name);
+  const setError = os.Setenv(name, value);
+  if (setError != nil) {
+    throw fmt.Errorf("cannot set environment variable %q: %w", name, setError);
+  }
+  let bodyFailed = false;
+  let bodyError: error = nil;
+  let restoreError: error = nil;
+  try {
+    try {
+      body();
+    } catch (err: error) {
+      bodyFailed = true;
+      bodyError = err;
+    }
+  } finally {
+    if (existed) {
+      restoreError = os.Setenv(name, previous);
+    } else {
+      restoreError = os.Unsetenv(name);
+    }
+  }
+  if (restoreError != nil) {
+    if (bodyFailed) {
+      throw fmt.Errorf("%v; environment variable %q restore failed: %w", bodyError, name, restoreError);
+    }
+    throw fmt.Errorf("environment variable %q restore failed: %w", name, restoreError);
+  }
+  if (bodyFailed) {
+    throw bodyError;
+  }
+}
+
+function recordMatch(): void {
+  const path = os.Getenv("VASEST_MATCH_LOG");
+  if (path == "") {
+    return;
+  }
+  const [file, openError] = os.OpenFile(path, os.O_APPEND | os.O_WRONLY, 0600);
+  if (openError != nil) {
+    throw openError;
+  }
+  const [written, writeError] = file.WriteString("1\n");
+  const closeError = file.Close();
+  if (writeError != nil) {
+    throw writeError;
+  }
+  if (closeError != nil) {
+    throw closeError;
+  }
+}
+
+function markFailedSuiteExit(): void {
+  const path = os.Getenv("VASEST_SUITE_EXIT_PATH");
+  if (path != "") {
+    const writeError = os.WriteFile(path, bytes.NewBufferString("1\n").Bytes(), 0600);
+    if (writeError != nil) {
+      throw fmt.Errorf("cannot record suite exit: %w", writeError);
+    }
+  }
+}
+
+export function fail(message: string): void {
+  if (message == "") {
+    throw assertionError(errors.New("test failed"));
+  }
+  throw assertionError(errors.New(message));
+}
+
+export function waitFor(body: () => void, timeout: time.Duration, interval: time.Duration): void {
+  if (body == nil) {
+    throw assertionError(errors.New("waitFor body must not be nil"));
+  }
+  if (timeout <= 0) {
+    throw assertionError(errors.New("waitFor timeout must be positive"));
+  }
+  if (interval <= 0) {
+    throw assertionError(errors.New("waitFor interval must be positive"));
+  }
+  const location = callerLocation();
+  const deadline = time.Now().Add(timeout);
+  let attempts = 0;
+  for (;;) {
+    attempts++;
+    try {
+      body();
+      return;
+    } catch (err: error) {
+      waitForNextAttempt(err, deadline, timeout, interval, attempts, "waitFor", location);
+    }
+  }
+}
+
+export function waitForValue<T>(read: () => T, predicate: (value: T) => boolean, timeout: time.Duration, interval: time.Duration): T {
+  const location = callerLocation();
+  if (read == nil) {
+    throw new FailureError(errors.New("waitForValue read must not be nil"), location);
+  }
+  if (predicate == nil) {
+    throw new FailureError(errors.New("waitForValue predicate must not be nil"), location);
+  }
+  if (timeout <= 0) {
+    throw new FailureError(errors.New("waitForValue timeout must be positive"), location);
+  }
+  if (interval <= 0) {
+    throw new FailureError(errors.New("waitForValue interval must be positive"), location);
+  }
+  const deadline = time.Now().Add(timeout);
+  let attempts = 0;
+  for (;;) {
+    attempts++;
+    try {
+      const value = read();
+      if (predicate(value)) {
+        return value;
+      }
+      throw new FailureError(errors.New("waitForValue predicate returned false"), location);
+    } catch (err: error) {
+      waitForNextAttempt(err, deadline, timeout, interval, attempts, "waitForValue", location);
+    }
+  }
+  // The source checker does not prove that this infinite loop cannot fall through.
+  throw errors.New("unreachable waitForValue loop");
+}
+
+function waitForNextAttempt(err: error, deadline: time.Time, timeout: time.Duration, interval: time.Duration, attempts: int, name: string, location: TestLocation): void {
+  if (testSkipReason(err) != "") {
+    throw err;
+  }
+  const remaining = time.Until(deadline);
+  if (remaining <= 0) {
+    throwWaitForTimeout(err, timeout, attempts, name, location);
+  }
+  let pause = interval;
+  if (pause > remaining) {
+    pause = remaining;
+  }
+  time.Sleep(pause);
+  if (time.Until(deadline) <= 0) {
+    throwWaitForTimeout(err, timeout, attempts, name, location);
+  }
+}
+
+function throwWaitForTimeout(err: error, timeout: time.Duration, attempts: int, name: string, location: TestLocation): void {
+  const timedOut = fmt.Errorf("%s timed out after %s (%d attempts): %w", name, timeout.String(), attempts, err);
+  if (failureLocation(err).source != "") {
+    throw timedOut;
+  }
+  throw new FailureError(timedOut, location);
+}
+
+export function expectApprox(actual: float64, expected: float64, tolerance: float64): void {
+  if (math.IsNaN(tolerance) || math.IsInf(tolerance, 0) || tolerance < 0) {
+    throw assertionError(errors.New("tolerance must be finite and non-negative"));
+  }
+  if (math.IsNaN(actual) || math.IsInf(actual, 0) || math.IsNaN(expected) || math.IsInf(expected, 0)) {
+    throw assertionError(errors.New("expectApprox requires finite values"));
+  }
+  const difference = math.Abs(actual - expected);
+  if (difference > tolerance) {
+    throw assertionError(fmt.Errorf("expected %g to be within %g of %g (difference %g)", actual, tolerance, expected, difference));
+  }
+}
+
+export function expectSnapshot(name: string, value: string): void {
+  if (strings.TrimSpace(name) == "") {
+    throw assertionError(errors.New("snapshot name must not be empty"));
+  }
+  const testFile = os.Getenv("VASEST_TEST_FILE");
+  if (testFile == "") {
+    throw assertionError(errors.New("expectSnapshot requires the Vasest runner"));
+  }
+  const scope = os.Getenv("VASEST_SNAPSHOT_SCOPE");
+  let key = name;
+  let header = fmt.Sprintf("# %q\n", name);
+  if (scope != "") {
+    key = scope + "\n" + name;
+    header = fmt.Sprintf("# %s / %q\n", scope, name);
+  }
+  const digest = sha256.Sum256(bytes.NewBufferString(key).Bytes());
+  const directory = filepath.Join(filepath.Dir(testFile), "__snapshots__", filepath.Base(testFile));
+  const path = filepath.Join(directory, fmt.Sprintf("%x.snap", digest));
+  const contents = header + value;
+  const [saved, readError] = os.ReadFile(path);
+  if (readError == nil && string(saved) == contents) {
+    return;
+  }
+  if (readError != nil && !os.IsNotExist(readError)) {
+    throw assertionError(fmt.Errorf("cannot read snapshot %q: %w", name, readError));
+  }
+  if (os.Getenv("VASEST_UPDATE_SNAPSHOTS") != "1") {
+    if (readError != nil) {
+      throw assertionError(fmt.Errorf("snapshot %q is missing at %s; rerun with --update-snapshots", name, path));
+    }
+    throw assertionError(fmt.Errorf("snapshot %q mismatch: %s; rerun with --update-snapshots", name, firstTextDifference(strings.TrimPrefix(string(saved), header), value)));
+  }
+  const mkdirError = os.MkdirAll(directory, 0755);
+  if (mkdirError != nil) {
+    throw assertionError(fmt.Errorf("cannot create snapshot directory: %w", mkdirError));
+  }
+  const [temporary, createError] = os.CreateTemp(directory, ".vasest-snapshot-*");
+  if (createError != nil) {
+    throw assertionError(fmt.Errorf("cannot create snapshot: %w", createError));
+  }
+  const temporaryPath = temporary.Name();
+  defer os.Remove(temporaryPath);
+  const [written, writeError] = temporary.WriteString(contents);
+  const closeError = temporary.Close();
+  if (writeError != nil) {
+    throw assertionError(fmt.Errorf("cannot write snapshot: %w", writeError));
+  }
+  if (closeError != nil) {
+    throw assertionError(fmt.Errorf("cannot close snapshot: %w", closeError));
+  }
+  const modeError = os.Chmod(temporaryPath, 0644);
+  if (modeError != nil) {
+    throw assertionError(fmt.Errorf("cannot set snapshot permissions: %w", modeError));
+  }
+  const renameError = os.Rename(temporaryPath, path);
+  if (renameError != nil) {
+    throw assertionError(fmt.Errorf("cannot update snapshot %q: %w", name, renameError));
+  }
+}
+
+export function expectJSONSnapshot<T>(name: string, value: T): void {
+  if (strings.TrimSpace(name) == "") {
+    throw assertionError(errors.New("snapshot name must not be empty"));
+  }
+  const [encoded, encodeError] = json.MarshalIndent(value, "", "  ");
+  if (encodeError != nil) {
+    throw assertionError(fmt.Errorf("cannot encode snapshot %q: %w", name, encodeError));
+  }
+  const location = callerLocation();
+  try {
+    expectSnapshot(name, string(encoded) + "\n");
+  } catch (err: error) {
+    throw new FailureError(err, location);
+  }
+}
+
+export class NegatedExpectation<T> {
+  private actual: T;
+
+  constructor(actual: T) {
+    this.actual = actual;
+  }
+
+  public function toEqual(expected: T): void {
+    const location = callerLocation();
+    try {
+      expectNotEqual(this.actual, expected);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toBe(expected: T): void {
+    const location = callerLocation();
+    try {
+      checkSameValue(this.actual, expected, true);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toBeNil(): void {
+    if (isNilValue(this.actual)) {
+      throw assertionError(errors.New("expected a non-nil value, got nil"));
+    }
+  }
+
+  public function toSatisfy(predicate: (value: T) => boolean): void {
+    checkPredicate<T>(this.actual, predicate, true, callerLocation());
+  }
+}
+
+export class Expectation<T> {
+  private actual: T;
+  public not: NegatedExpectation<T>;
+
+  constructor(actual: T) {
+    this.actual = actual;
+    this.not = new NegatedExpectation<T>(actual);
+  }
+
+  public function toEqual(expected: T): void {
+    const location = callerLocation();
+    try {
+      expectEqual(this.actual, expected);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toBe(expected: T): void {
+    const location = callerLocation();
+    try {
+      checkSameValue(this.actual, expected, false);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toBeNil(): void {
+    if (!isNilValue(this.actual)) {
+      throw assertionError(fmt.Errorf("expected nil, got %#v", diagnosticArgument(this.actual)));
+    }
+  }
+
+  public function toSatisfy(predicate: (value: T) => boolean): void {
+    checkPredicate<T>(this.actual, predicate, false, callerLocation());
+  }
+}
+
+export function expect<T>(actual: T): Expectation<T> {
+  return new Expectation<T>(actual);
+}
+
+function checkPredicate<T>(actual: T, predicate: (value: T) => boolean, negated: boolean, location: TestLocation): void {
+  if (predicate == nil) {
+    throw new FailureError(errors.New("toSatisfy predicate must not be nil"), location);
+  }
+  // Call once and propagate throws, skips and native panics unchanged.
+  if (predicate(actual) == negated) {
+    if (negated) {
+      throw new FailureError(fmt.Errorf("expected %#v not to satisfy predicate", diagnosticArgument(actual)), location);
+    }
+    throw new FailureError(fmt.Errorf("expected %#v to satisfy predicate", diagnosticArgument(actual)), location);
+  }
+}
+
+export class NegatedOrderedExpectation<T extends cmp.Ordered> {
+  private actual: T;
+
+  constructor(actual: T) {
+    this.actual = actual;
+  }
+
+  public function toBeGreaterThan(expected: T): void {
+    checkOrdered<T>(this.actual, expected, "greater than", true, callerLocation());
+  }
+
+  public function toBeGreaterThanOrEqual(expected: T): void {
+    checkOrdered<T>(this.actual, expected, "greater than or equal to", true, callerLocation());
+  }
+
+  public function toBeLessThan(expected: T): void {
+    checkOrdered<T>(this.actual, expected, "less than", true, callerLocation());
+  }
+
+  public function toBeLessThanOrEqual(expected: T): void {
+    checkOrdered<T>(this.actual, expected, "less than or equal to", true, callerLocation());
+  }
+}
+
+export class OrderedExpectation<T extends cmp.Ordered> {
+  private actual: T;
+  public not: NegatedOrderedExpectation<T>;
+
+  constructor(actual: T) {
+    this.actual = actual;
+    this.not = new NegatedOrderedExpectation<T>(actual);
+  }
+
+  public function toBeGreaterThan(expected: T): void {
+    checkOrdered<T>(this.actual, expected, "greater than", false, callerLocation());
+  }
+
+  public function toBeGreaterThanOrEqual(expected: T): void {
+    checkOrdered<T>(this.actual, expected, "greater than or equal to", false, callerLocation());
+  }
+
+  public function toBeLessThan(expected: T): void {
+    checkOrdered<T>(this.actual, expected, "less than", false, callerLocation());
+  }
+
+  public function toBeLessThanOrEqual(expected: T): void {
+    checkOrdered<T>(this.actual, expected, "less than or equal to", false, callerLocation());
+  }
+}
+
+export function expectOrdered<T extends cmp.Ordered>(actual: T): OrderedExpectation<T> {
+  return new OrderedExpectation<T>(actual);
+}
+
+function checkOrdered<T extends cmp.Ordered>(actual: T, expected: T, relation: string, negated: boolean, location: TestLocation): void {
+  let matches = false;
+  if (relation == "greater than") {
+    matches = actual > expected;
+  } else if (relation == "greater than or equal to") {
+    matches = actual >= expected;
+  } else if (relation == "less than") {
+    matches = actual < expected;
+  } else {
+    matches = actual <= expected;
+  }
+  if (matches == negated) {
+    if (negated) {
+      throw new FailureError(fmt.Errorf("expected %#v not to be %s %#v", diagnosticArgument(actual), relation, diagnosticArgument(expected)), location);
+    }
+    throw new FailureError(fmt.Errorf("expected %#v to be %s %#v", diagnosticArgument(actual), relation, diagnosticArgument(expected)), location);
+  }
+}
+
+export constraint Float = ~float32 | ~float64;
+
+export class NegatedFloatExpectation<T extends Float> {
+  private actual: T;
+
+  constructor(actual: T) {
+    this.actual = actual;
+  }
+
+  public function toBeCloseTo(expected: T, tolerance: T): void {
+    checkFloatApprox<T>(this.actual, expected, tolerance, true, callerLocation());
+  }
+
+  public function toBeNaN(): void {
+    checkFloatProperty<T>(this.actual, "NaN", true, callerLocation());
+  }
+
+  public function toBeFinite(): void {
+    checkFloatProperty<T>(this.actual, "finite", true, callerLocation());
+  }
+}
+
+export class FloatExpectation<T extends Float> {
+  private actual: T;
+  public not: NegatedFloatExpectation<T>;
+
+  constructor(actual: T) {
+    this.actual = actual;
+    this.not = new NegatedFloatExpectation<T>(actual);
+  }
+
+  public function toBeCloseTo(expected: T, tolerance: T): void {
+    checkFloatApprox<T>(this.actual, expected, tolerance, false, callerLocation());
+  }
+
+  public function toBeNaN(): void {
+    checkFloatProperty<T>(this.actual, "NaN", false, callerLocation());
+  }
+
+  public function toBeFinite(): void {
+    checkFloatProperty<T>(this.actual, "finite", false, callerLocation());
+  }
+}
+
+export function expectFloat<T extends Float>(actual: T): FloatExpectation<T> {
+  return new FloatExpectation<T>(actual);
+}
+
+function checkFloatApprox<T extends Float>(actual: T, expected: T, tolerance: T, negated: boolean, location: TestLocation): void {
+  if (math.IsNaN(float64(tolerance)) || math.IsInf(float64(tolerance), 0) || tolerance < 0) {
+    throw new FailureError(errors.New("tolerance must be finite and non-negative"), location);
+  }
+  if (math.IsNaN(float64(actual)) || math.IsInf(float64(actual), 0) || math.IsNaN(float64(expected)) || math.IsInf(float64(expected), 0)) {
+    throw new FailureError(errors.New("toBeCloseTo requires finite values"), location);
+  }
+  // Keep subtraction and its rounding in T, including float32 and nominal types.
+  let difference = actual - expected;
+  if (difference < 0) {
+    difference = -difference;
+  }
+  if ((difference <= tolerance) == negated) {
+    let qualifier = "";
+    if (negated) {
+      qualifier = "not ";
+    }
+    throw new FailureError(fmt.Errorf("expected %g %sto be within %g of %g (difference %g)", actual, qualifier, tolerance, expected, difference), location);
+  }
+}
+
+function checkFloatProperty<T extends Float>(actual: T, property: string, negated: boolean, location: TestLocation): void {
+  let matches = math.IsNaN(float64(actual));
+  if (property == "finite") {
+    matches = !math.IsNaN(float64(actual)) && !math.IsInf(float64(actual), 0);
+  }
+  if (matches == negated) {
+    let qualifier = "";
+    if (negated) {
+      qualifier = "not ";
+    }
+    throw new FailureError(fmt.Errorf("expected %g %sto be %s", actual, qualifier, property), location);
+  }
+}
+
+export class NegatedStringExpectation {
+  private actual: string;
+
+  constructor(actual: string) {
+    this.actual = actual;
+  }
+
+  public function toContain(fragment: string): void {
+    const location = callerLocation();
+    try {
+      expectNotContains(this.actual, fragment);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toMatch(pattern: string): void {
+    const location = callerLocation();
+    try {
+      expectNotMatches(this.actual, pattern);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toStartWith(prefix: string): void {
+    checkStringBoundary(this.actual, prefix, true, true, callerLocation());
+  }
+
+  public function toEndWith(suffix: string): void {
+    checkStringBoundary(this.actual, suffix, false, true, callerLocation());
+  }
+
+  public function toHaveLength(expected: int): void {
+    const location = callerLocation();
+    try {
+      checkLength(len(this.actual), expected, true);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+}
+
+export class StringExpectation {
+  private actual: string;
+  public not: NegatedStringExpectation;
+
+  constructor(actual: string) {
+    this.actual = actual;
+    this.not = new NegatedStringExpectation(actual);
+  }
+
+  public function toContain(fragment: string): void {
+    const location = callerLocation();
+    try {
+      expectContains(this.actual, fragment);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toMatch(pattern: string): void {
+    const location = callerLocation();
+    try {
+      expectMatches(this.actual, pattern);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toStartWith(prefix: string): void {
+    checkStringBoundary(this.actual, prefix, true, false, callerLocation());
+  }
+
+  public function toEndWith(suffix: string): void {
+    checkStringBoundary(this.actual, suffix, false, false, callerLocation());
+  }
+
+  public function toHaveLength(expected: int): void {
+    const location = callerLocation();
+    try {
+      checkLength(len(this.actual), expected, false);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+}
+
+export function expectString(actual: string): StringExpectation {
+  return new StringExpectation(actual);
+}
+
+function checkStringBoundary(actual: string, fragment: string, fromStart: boolean, negated: boolean, location: TestLocation): void {
+  let matches = false;
+  let relation = "";
+  if (fromStart) {
+    matches = strings.HasPrefix(actual, fragment);
+    relation = "start with";
+  } else {
+    matches = strings.HasSuffix(actual, fragment);
+    relation = "end with";
+  }
+  if (matches == negated) {
+    let qualifier = "";
+    if (negated) { qualifier = "not "; }
+    throw new FailureError(fmt.Errorf("expected %q %sto %s %q", actual, qualifier, relation, fragment), location);
+  }
+}
+
+export class NegatedSliceExpectation<T> {
+  private actual: T[];
+
+  constructor(actual: T[]) {
+    this.actual = actual;
+  }
+
+  public function toHaveElement(index: int, expected: T): void {
+    checkSliceElement<T>(this.actual, index, expected, true, callerLocation());
+  }
+
+  public function toHaveElementSatisfying(index: int, predicate: (value: T) => boolean): void {
+    checkSliceElementPredicate<T>(this.actual, index, predicate, true, callerLocation());
+  }
+
+  public function toContain(expected: T): void {
+    const location = callerLocation();
+    try {
+      checkSliceContains(this.actual, expected, true);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toHaveLength(expected: int): void {
+    const location = callerLocation();
+    try {
+      checkLength(len(this.actual), expected, true);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toSatisfyAny(predicate: (value: T) => boolean): void {
+    checkSlicePredicate<T>(this.actual, predicate, false, true, callerLocation());
+  }
+
+  public function toEqualUnordered(expected: T[]): void {
+    checkSliceEqualUnordered<T>(this.actual, expected, true, callerLocation());
+  }
+
+  public function toContainAll(expected: T[]): void {
+    checkSliceContainsAll<T>(this.actual, expected, true, callerLocation());
+  }
+
+  public function toStartWith(expected: T[]): void {
+    checkSliceBoundary<T>(this.actual, expected, true, true, callerLocation());
+  }
+
+  public function toEndWith(expected: T[]): void {
+    checkSliceBoundary<T>(this.actual, expected, false, true, callerLocation());
+  }
+
+  public function toContainSequence(expected: T[]): void {
+    checkSliceSequence<T>(this.actual, expected, true, callerLocation());
+  }
+
+  public function toContainInOrder(expected: T[]): void {
+    checkSliceInOrder<T>(this.actual, expected, true, callerLocation());
+  }
+
+  public function toSatisfyAll(predicate: (value: T) => boolean): void {
+    checkSlicePredicate<T>(this.actual, predicate, true, true, callerLocation());
+  }
+
+  public function toSatisfyAnyIndexed(predicate: (value: T, index: int) => boolean): void {
+    checkSliceIndexedPredicate<T>(this.actual, predicate, false, true, callerLocation());
+  }
+
+  public function toSatisfyAllIndexed(predicate: (value: T, index: int) => boolean): void {
+    checkSliceIndexedPredicate<T>(this.actual, predicate, true, true, callerLocation());
+  }
+}
+
+export class SliceExpectation<T> {
+  private actual: T[];
+  public not: NegatedSliceExpectation<T>;
+
+  constructor(actual: T[]) {
+    this.actual = actual;
+    this.not = new NegatedSliceExpectation<T>(actual);
+  }
+
+  public function toHaveElement(index: int, expected: T): void {
+    checkSliceElement<T>(this.actual, index, expected, false, callerLocation());
+  }
+
+  public function toHaveElementSatisfying(index: int, predicate: (value: T) => boolean): void {
+    checkSliceElementPredicate<T>(this.actual, index, predicate, false, callerLocation());
+  }
+
+  public function toContain(expected: T): void {
+    const location = callerLocation();
+    try {
+      checkSliceContains(this.actual, expected, false);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toHaveLength(expected: int): void {
+    const location = callerLocation();
+    try {
+      checkLength(len(this.actual), expected, false);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toSatisfyAny(predicate: (value: T) => boolean): void {
+    checkSlicePredicate<T>(this.actual, predicate, false, false, callerLocation());
+  }
+
+  public function toEqualUnordered(expected: T[]): void {
+    checkSliceEqualUnordered<T>(this.actual, expected, false, callerLocation());
+  }
+
+  public function toContainAll(expected: T[]): void {
+    checkSliceContainsAll<T>(this.actual, expected, false, callerLocation());
+  }
+
+  public function toStartWith(expected: T[]): void {
+    checkSliceBoundary<T>(this.actual, expected, true, false, callerLocation());
+  }
+
+  public function toEndWith(expected: T[]): void {
+    checkSliceBoundary<T>(this.actual, expected, false, false, callerLocation());
+  }
+
+  public function toContainSequence(expected: T[]): void {
+    checkSliceSequence<T>(this.actual, expected, false, callerLocation());
+  }
+
+  public function toContainInOrder(expected: T[]): void {
+    checkSliceInOrder<T>(this.actual, expected, false, callerLocation());
+  }
+
+  public function toSatisfyAll(predicate: (value: T) => boolean): void {
+    checkSlicePredicate<T>(this.actual, predicate, true, false, callerLocation());
+  }
+
+  public function toSatisfyAnyIndexed(predicate: (value: T, index: int) => boolean): void {
+    checkSliceIndexedPredicate<T>(this.actual, predicate, false, false, callerLocation());
+  }
+
+  public function toSatisfyAllIndexed(predicate: (value: T, index: int) => boolean): void {
+    checkSliceIndexedPredicate<T>(this.actual, predicate, true, false, callerLocation());
+  }
+}
+
+export function expectSlice<T>(actual: T[]): SliceExpectation<T> {
+  return new SliceExpectation<T>(actual);
+}
+
+function checkSliceElement<T>(actual: T[], index: int, expected: T, negated: boolean, location: TestLocation): void {
+  if (index < 0) {
+    throw new FailureError(errors.New("slice element index must not be negative"), location);
+  }
+  if (index >= len(actual)) {
+    if (negated) { return; }
+    throw new FailureError(fmt.Errorf("expected slice element %d to equal %#v, index is missing", index, diagnosticArgument(expected)), location);
+  }
+  const value = actual[index];
+  if (reflect.DeepEqual(value, expected) == negated) {
+    let qualifier = "";
+    if (negated) { qualifier = "not "; }
+    throw new FailureError(fmt.Errorf("expected slice element %d %sto equal %#v, got %#v", index, qualifier, diagnosticArgument(expected), diagnosticArgument(value)), location);
+  }
+}
+
+function checkSliceElementPredicate<T>(actual: T[], index: int, predicate: (value: T) => boolean, negated: boolean, location: TestLocation): void {
+  if (index < 0) {
+    throw new FailureError(errors.New("slice element index must not be negative"), location);
+  }
+  if (predicate == nil) {
+    throw new FailureError(errors.New("toHaveElementSatisfying predicate must not be nil"), location);
+  }
+  if (index >= len(actual)) {
+    if (negated) { return; }
+    throw new FailureError(fmt.Errorf("expected slice element %d to satisfy predicate, index is missing", index), location);
+  }
+  // Read once before invoking user code; keep the selected native value and
+  // propagate callback control flow without wrapping or retrying it.
+  const value = actual[index];
+  if (predicate(value) == negated) {
+    let qualifier = "";
+    if (negated) { qualifier = "not "; }
+    throw new FailureError(fmt.Errorf("expected slice element %d %sto satisfy predicate", index, qualifier), location);
+  }
+}
+
+function sliceBoundaryMatches<T>(actual: T[], expected: T[], fromStart: boolean): boolean {
+  if (len(expected) > len(actual)) {
+    return false;
+  }
+  let offset = 0;
+  if (!fromStart) {
+    offset = len(actual) - len(expected);
+  }
+  for (let index = 0; index < len(expected); index++) {
+    if (!reflect.DeepEqual(actual[offset + index], expected[index])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function checkSliceBoundary<T>(actual: T[], expected: T[], fromStart: boolean, negated: boolean, location: TestLocation): void {
+  if (sliceBoundaryMatches<T>(actual, expected, fromStart) == negated) {
+    let qualifier = "";
+    if (negated) { qualifier = "not "; }
+    let relation = "start with";
+    if (!fromStart) { relation = "end with"; }
+    throw new FailureError(fmt.Errorf("expected slice %sto %s %#v, got %#v", qualifier, relation, diagnosticArgument(expected), diagnosticArgument(actual)), location);
+  }
+}
+
+function sliceContainsSequence<T>(actual: T[], expected: T[]): boolean {
+  if (len(expected) > len(actual)) {
+    return false;
+  }
+  for (let offset = 0; offset <= len(actual) - len(expected); offset++) {
+    if (sliceBoundaryMatches<T>(actual[offset:len(actual)], expected, true)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function checkSliceSequence<T>(actual: T[], expected: T[], negated: boolean, location: TestLocation): void {
+  if (sliceContainsSequence<T>(actual, expected) == negated) {
+    let qualifier = "";
+    if (negated) { qualifier = "not "; }
+    throw new FailureError(fmt.Errorf("expected slice %sto contain contiguous sequence %#v, got %#v", qualifier, diagnosticArgument(expected), diagnosticArgument(actual)), location);
+  }
+}
+
+function sliceContainsInOrder<T>(actual: T[], expected: T[]): boolean {
+  if (len(expected) == 0) {
+    return true;
+  }
+  if (len(expected) > len(actual)) {
+    return false;
+  }
+  let matched = 0;
+  for (const value of actual) {
+    if (reflect.DeepEqual(value, expected[matched])) {
+      matched++;
+      if (matched == len(expected)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function checkSliceInOrder<T>(actual: T[], expected: T[], negated: boolean, location: TestLocation): void {
+  if (sliceContainsInOrder<T>(actual, expected) == negated) {
+    let qualifier = "";
+    if (negated) { qualifier = "not "; }
+    throw new FailureError(fmt.Errorf("expected slice %sto contain %#v in order, got %#v", qualifier, diagnosticArgument(expected), diagnosticArgument(actual)), location);
+  }
+}
+
+function sliceEqualUnordered<T>(actual: T[], expected: T[]): boolean {
+  if (len(actual) != len(expected)) {
+    return false;
+  }
+  if (actual == nil || expected == nil) {
+    return actual == nil && expected == nil;
+  }
+  return sliceContainsAll<T>(actual, expected);
+}
+
+function sliceContainsAll<T>(actual: T[], expected: T[]): boolean {
+  if (len(expected) == 0) {
+    return true;
+  }
+  if (len(expected) > len(actual)) {
+    return false;
+  }
+  let matched: boolean[] = [];
+  for (const value of actual) {
+    matched = append(matched, false);
+  }
+  for (const value of expected) {
+    let found = false;
+    let index = 0;
+    for (const candidate of actual) {
+      if (!matched[index] && reflect.DeepEqual(value, candidate)) {
+        matched[index] = true;
+        found = true;
+        break;
+      }
+      index++;
+    }
+    if (!found) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function checkSliceContainsAll<T>(actual: T[], expected: T[], negated: boolean, location: TestLocation): void {
+  if (sliceContainsAll<T>(actual, expected) == negated) {
+    let qualifier = "";
+    if (negated) {
+      qualifier = "not ";
+    }
+    throw new FailureError(fmt.Errorf("expected slice %sto contain all %#v including duplicate counts, got %#v", qualifier, diagnosticArgument(expected), diagnosticArgument(actual)), location);
+  }
+}
+
+function checkSliceEqualUnordered<T>(actual: T[], expected: T[], negated: boolean, location: TestLocation): void {
+  if (sliceEqualUnordered<T>(actual, expected) == negated) {
+    let qualifier = "";
+    if (negated) {
+      qualifier = "not ";
+    }
+    throw new FailureError(fmt.Errorf("expected slice %sto equal %#v ignoring order, got %#v", qualifier, diagnosticArgument(expected), diagnosticArgument(actual)), location);
+  }
+}
+
+function checkSlicePredicate<T>(actual: T[], predicate: (value: T) => boolean, all: boolean, negated: boolean, location: TestLocation): void {
+  let matcher = "toSatisfyAny";
+  let quantifier = "any";
+  if (all) {
+    matcher = "toSatisfyAll";
+    quantifier = "every";
+  }
+  if (predicate == nil) {
+    throw new FailureError(fmt.Errorf("%s predicate must not be nil", matcher), location);
+  }
+  let matches = all;
+  let checked = 0;
+  // Preserve native element values and propagate callback control flow unchanged.
+  for (const value of actual) {
+    checked++;
+    if (predicate(value) != all) {
+      matches = !all;
+      break;
+    }
+  }
+  if (matches == negated) {
+    let qualifier = "";
+    if (negated) {
+      qualifier = "not ";
+    }
+    throw new FailureError(fmt.Errorf("expected slice %sto satisfy predicate for %s element, checked %d of %d element(s)", qualifier, quantifier, checked, len(actual)), location);
+  }
+}
+
+function checkSliceIndexedPredicate<T>(actual: T[], predicate: (value: T, index: int) => boolean, all: boolean, negated: boolean, location: TestLocation): void {
+  let matcher = "toSatisfyAnyIndexed";
+  let quantifier = "any";
+  if (all) {
+    matcher = "toSatisfyAllIndexed";
+    quantifier = "every";
+  }
+  if (predicate == nil) {
+    throw new FailureError(fmt.Errorf("%s predicate must not be nil", matcher), location);
+  }
+  let matches = all;
+  let checked = 0;
+  for (let index = 0; index < len(actual); index++) {
+    checked++;
+    if (predicate(actual[index], index) != all) {
+      matches = !all;
+      break;
+    }
+  }
+  if (matches == negated) {
+    let qualifier = "";
+    if (negated) { qualifier = "not "; }
+    throw new FailureError(fmt.Errorf("expected slice %sto satisfy indexed predicate for %s element, checked %d of %d element(s)", qualifier, quantifier, checked, len(actual)), location);
+  }
+}
+
+export class NegatedMapExpectation<K extends comparable, V> {
+  private actual: Map<K, V>;
+
+  constructor(actual: Map<K, V>) {
+    this.actual = actual;
+  }
+
+  public function toHaveKey(key: K): void {
+    const location = callerLocation();
+    try {
+      checkMapKey<K, V>(this.actual, key, true);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toHaveEntry(key: K, expected: V): void {
+    const location = callerLocation();
+    try {
+      checkMapEntry<K, V>(this.actual, key, expected, true);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toHaveEntrySatisfying(key: K, predicate: (value: V) => boolean): void {
+    checkMapEntryPredicate<K, V>(this.actual, key, predicate, true, callerLocation());
+  }
+
+  public function toHaveEntries(expected: Map<K, V>): void {
+    checkMapEntries<K, V>(this.actual, expected, true, callerLocation());
+  }
+
+  public function toSatisfyAny(predicate: (key: K, value: V) => boolean): void {
+    checkMapPredicate<K, V>(this.actual, predicate, false, true, callerLocation());
+  }
+
+  public function toSatisfyAll(predicate: (key: K, value: V) => boolean): void {
+    checkMapPredicate<K, V>(this.actual, predicate, true, true, callerLocation());
+  }
+
+  public function toHaveLength(expected: int): void {
+    const location = callerLocation();
+    try {
+      checkLength(len(this.actual), expected, true);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+}
+
+export class MapExpectation<K extends comparable, V> {
+  private actual: Map<K, V>;
+  public not: NegatedMapExpectation<K, V>;
+
+  constructor(actual: Map<K, V>) {
+    this.actual = actual;
+    this.not = new NegatedMapExpectation<K, V>(actual);
+  }
+
+  public function toHaveKey(key: K): void {
+    const location = callerLocation();
+    try {
+      checkMapKey<K, V>(this.actual, key, false);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toHaveEntry(key: K, expected: V): void {
+    const location = callerLocation();
+    try {
+      checkMapEntry<K, V>(this.actual, key, expected, false);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toHaveEntrySatisfying(key: K, predicate: (value: V) => boolean): void {
+    checkMapEntryPredicate<K, V>(this.actual, key, predicate, false, callerLocation());
+  }
+
+  public function toHaveEntries(expected: Map<K, V>): void {
+    checkMapEntries<K, V>(this.actual, expected, false, callerLocation());
+  }
+
+  public function toSatisfyAny(predicate: (key: K, value: V) => boolean): void {
+    checkMapPredicate<K, V>(this.actual, predicate, false, false, callerLocation());
+  }
+
+  public function toSatisfyAll(predicate: (key: K, value: V) => boolean): void {
+    checkMapPredicate<K, V>(this.actual, predicate, true, false, callerLocation());
+  }
+
+  public function toHaveLength(expected: int): void {
+    const location = callerLocation();
+    try {
+      checkLength(len(this.actual), expected, false);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+}
+
+export function expectMap<K extends comparable, V>(actual: Map<K, V>): MapExpectation<K, V> {
+  return new MapExpectation<K, V>(actual);
+}
+
+function checkMapKey<K extends comparable, V>(actual: Map<K, V>, key: K, negated: boolean): void {
+  const [value, present] = actual[key];
+  if (present == negated) {
+    if (negated) {
+      throw fmt.Errorf("expected map not to have key %#v", diagnosticArgument(key));
+    }
+    throw fmt.Errorf("expected map to have key %#v", diagnosticArgument(key));
+  }
+}
+
+function checkMapEntry<K extends comparable, V>(actual: Map<K, V>, key: K, expected: V, negated: boolean): void {
+  const [value, present] = actual[key];
+  const matches = present && reflect.DeepEqual(value, expected);
+  if (matches == negated) {
+    if (negated) {
+      throw fmt.Errorf("expected map not to have entry %#v: %#v", diagnosticArgument(key), diagnosticArgument(expected));
+    }
+    if (!present) {
+      throw fmt.Errorf("expected map entry %#v: %#v, key is missing", diagnosticArgument(key), diagnosticArgument(expected));
+    }
+    throw fmt.Errorf("expected map entry %#v: %#v, got %#v", diagnosticArgument(key), diagnosticArgument(expected), diagnosticArgument(value));
+  }
+}
+
+function checkMapEntries<K extends comparable, V>(actual: Map<K, V>, expected: Map<K, V>, negated: boolean, location: TestLocation): void {
+  let matches = true;
+  // Match each required entry using the same lookup and equality as toHaveEntry.
+  // Do not shortcut aliased maps: NaN keys and values retain native behavior.
+  for (const [key, required] of expected) {
+    const [value, present] = actual[key];
+    if (!present || !reflect.DeepEqual(value, required)) {
+      matches = false;
+      break;
+    }
+  }
+  if (matches == negated) {
+    let qualifier = "";
+    if (negated) { qualifier = "not "; }
+    throw new FailureError(fmt.Errorf("expected map %sto have entries %#v, got %#v", qualifier, diagnosticArgument(expected), diagnosticArgument(actual)), location);
+  }
+}
+
+function checkMapEntryPredicate<K extends comparable, V>(actual: Map<K, V>, key: K, predicate: (value: V) => boolean, negated: boolean, location: TestLocation): void {
+  if (predicate == nil) {
+    throw new FailureError(errors.New("toHaveEntrySatisfying predicate must not be nil"), location);
+  }
+  const [value, present] = actual[key];
+  if (!present) {
+    if (negated) {
+      return;
+    }
+    throw new FailureError(fmt.Errorf("expected map entry %#v to satisfy predicate, key is missing", diagnosticArgument(key)), location);
+  }
+  // Read once and preserve the selected native value and callback control flow.
+  if (predicate(value) == negated) {
+    if (negated) {
+      throw new FailureError(fmt.Errorf("expected map entry %#v not to satisfy predicate", diagnosticArgument(key)), location);
+    }
+    throw new FailureError(fmt.Errorf("expected map entry %#v to satisfy predicate", diagnosticArgument(key)), location);
+  }
+}
+
+function checkMapPredicate<K extends comparable, V>(actual: Map<K, V>, predicate: (key: K, value: V) => boolean, all: boolean, negated: boolean, location: TestLocation): void {
+  let matcher = "toSatisfyAny";
+  let quantifier = "any";
+  if (all) {
+    matcher = "toSatisfyAll";
+    quantifier = "every";
+  }
+  if (predicate == nil) {
+    throw new FailureError(fmt.Errorf("%s predicate must not be nil", matcher), location);
+  }
+  let matches = all;
+  let checked = 0;
+  // Iterate native pairs directly: a second lookup would lose NaN-key values.
+  for (const [key, value] of actual) {
+    checked++;
+    if (predicate(key, value) != all) {
+      matches = !all;
+      break;
+    }
+  }
+  if (matches == negated) {
+    let qualifier = "";
+    if (negated) {
+      qualifier = "not ";
+    }
+    throw new FailureError(fmt.Errorf("expected map %sto satisfy predicate for %s entry, checked %d entry(s)", qualifier, quantifier, checked), location);
+  }
+}
+
+function checkLength(actual: int, expected: int, negated: boolean): void {
+  if (expected < 0) {
+    throw errors.New("expected length must not be negative");
+  }
+  if ((actual == expected) == negated) {
+    if (negated) {
+      throw fmt.Errorf("did not expect length %d", expected);
+    }
+    throw fmt.Errorf("expected length %d, got %d", expected, actual);
+  }
+}
+
+function checkSliceContains<T>(actual: T[], expected: T, negated: boolean): void {
+  let found = false;
+  for (const value of actual) {
+    if (reflect.DeepEqual(value, expected)) {
+      found = true;
+      break;
+    }
+  }
+  if (found == negated) {
+    if (negated) {
+      throw fmt.Errorf("expected slice %#v not to contain %#v", diagnosticArgument(actual), diagnosticArgument(expected));
+    }
+    throw fmt.Errorf("expected slice %#v to contain %#v", diagnosticArgument(actual), diagnosticArgument(expected));
+  }
+}
+
+function errorTypeSatisfies<T>(actual: error, predicate: (value: T) => boolean, targetType: reflect.Type): boolean {
+  // Every extraction gets a fresh destination, including custom As matches with nil values.
+  const target = reflect.New(targetType);
+  const selected = target.Interface() as! *T;
+  return errors.As(actual, selected) && predicate(*selected);
+}
+
+function checkErrorTypePredicate<T>(actual: error, predicate: (value: T) => boolean, negated: boolean, location: TestLocation): void {
+  if (predicate == nil) {
+    throw new FailureError(errors.New("error type predicate must not be nil"), location);
+  }
+  let targetType: reflect.Type = nil;
+  try {
+    targetType = checkedErrorMatchType<T>("toMatchTypeSatisfying");
+  } catch (err: error) {
+    throw new FailureError(err, location);
+  }
+  // Native As and predicate control flow must retain their original identity/location.
+  const matches = errorTypeSatisfies<T>(actual, predicate, targetType);
+  if (matches == negated) {
+    let qualifier = "";
+    if (negated) {
+      qualifier = "not ";
+    }
+    throw new FailureError(fmt.Errorf("expected error %sto contain a value assignable to %s satisfying predicate (errors.As)", qualifier, targetType.String()), location);
+  }
+}
+
+export class NegatedErrorExpectation {
+  private actual: error;
+
+  constructor(actual: error) {
+    this.actual = actual;
+  }
+
+  public function toBeNil(): void {
+    const location = callerLocation();
+    try {
+      expectError(this.actual);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toMatchCause(target: error): void {
+    if (errors.Is(this.actual, target)) {
+      throw assertionError(fmt.Errorf("expected error %v not to match %v (errors.Is)", this.actual, target));
+    }
+  }
+
+  public function toMatchType<T>(): void {
+    const location = callerLocation();
+    try {
+      const targetType = checkedErrorMatchType<T>("toMatchType");
+      const target = reflect.New(targetType);
+      if (errors.As(this.actual, target.Interface())) {
+        throw fmt.Errorf("expected error %v not to contain a value assignable to %s (errors.As)", this.actual, targetType.String());
+      }
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toMatchTypeSatisfying<T>(predicate: (value: T) => boolean): void {
+    checkErrorTypePredicate<T>(this.actual, predicate, true, callerLocation());
+  }
+}
+
+export class ErrorExpectation {
+  private actual: error;
+  public not: NegatedErrorExpectation;
+
+  constructor(actual: error) {
+    this.actual = actual;
+    this.not = new NegatedErrorExpectation(actual);
+  }
+
+  public function toBeNil(): void {
+    const location = callerLocation();
+    try {
+      expectNoError(this.actual);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toMatchCause(target: error): void {
+    const location = callerLocation();
+    try {
+      expectErrorIs(this.actual, target);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toMatchType<T>(target: *T): void {
+    const location = callerLocation();
+    try {
+      expectErrorAs<T>(this.actual, target);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toMatchTypeSatisfying<T>(predicate: (value: T) => boolean): void {
+    checkErrorTypePredicate<T>(this.actual, predicate, false, callerLocation());
+  }
+}
+
+export function expectErrorValue(actual: error): ErrorExpectation {
+  return new ErrorExpectation(actual);
+}
+
+struct FunctionOutcome {
+  public threw: boolean;
+  public exception: error;
+}
+
+function invokeFunctionExpectation(body: () => void): FunctionOutcome {
+  if (body == nil) {
+    throw errors.New("function expectation body must not be nil");
+  }
+  try {
+    body();
+  } catch (err: error) {
+    return FunctionOutcome { threw: true, exception: err };
+  }
+  return FunctionOutcome { threw: false, exception: nil };
+}
+
+function requireFunctionThrow(outcome: FunctionOutcome): error {
+  if (!outcome.threw) {
+    throw errors.New("expected function to throw an error");
+  }
+  return outcome.exception;
+}
+
+function functionThrowMessage(outcome: FunctionOutcome): string {
+  if (outcome.exception == nil) {
+    return "";
+  }
+  return outcome.exception.Error();
+}
+
+function validateThrowMessage(fragment: string): void {
+  if (fragment == "") {
+    throw errors.New("expected error message fragment must not be empty");
+  }
+}
+
+function checkFunctionThrowPredicate(body: () => void, predicate: (exception: error) => boolean, negated: boolean, location: TestLocation): void {
+  if (predicate == nil) {
+    throw new FailureError(errors.New("function throw predicate must not be nil"), location);
+  }
+  if (body == nil) {
+    throw new FailureError(errors.New("function expectation body must not be nil"), location);
+  }
+  const outcome = invokeFunctionExpectation(body);
+  if (!outcome.threw) {
+    if (!negated) {
+      throw new FailureError(errors.New("expected function to throw an error"), location);
+    }
+    return;
+  }
+  // Only the body is captured as an outcome. Predicate control flow propagates.
+  if (predicate(outcome.exception) == negated) {
+    let qualifier = "";
+    if (negated) {
+      qualifier = "not ";
+    }
+    throw new FailureError(fmt.Errorf("expected function %sto throw an error satisfying predicate", qualifier), location);
+  }
+}
+
+function checkFunctionThrowTypePredicate<T>(body: () => void, predicate: (value: T) => boolean, negated: boolean, location: TestLocation): void {
+  if (predicate == nil) {
+    throw new FailureError(errors.New("function throw type predicate must not be nil"), location);
+  }
+  let targetType: reflect.Type = nil;
+  try {
+    targetType = checkedErrorMatchType<T>("toThrowTypeSatisfying");
+  } catch (err: error) {
+    throw new FailureError(err, location);
+  }
+  if (body == nil) {
+    throw new FailureError(errors.New("function expectation body must not be nil"), location);
+  }
+  const outcome = invokeFunctionExpectation(body);
+  if (!outcome.threw) {
+    if (!negated) {
+      throw new FailureError(errors.New("expected function to throw an error"), location);
+    }
+    return;
+  }
+  // Capture only the body. Native As and predicate control flow propagate unchanged.
+  const matches = errorTypeSatisfies<T>(outcome.exception, predicate, targetType);
+  if (matches == negated) {
+    let qualifier = "";
+    if (negated) {
+      qualifier = "not ";
+    }
+    throw new FailureError(fmt.Errorf("expected function %sto throw a value assignable to %s satisfying predicate (errors.As)", qualifier, targetType.String()), location);
+  }
+}
+
+export class NegatedFunctionExpectation {
+  private body: () => void;
+
+  constructor(body: () => void) {
+    this.body = body;
+  }
+
+  public function toThrowSatisfying(predicate: (exception: error) => boolean): void {
+    checkFunctionThrowPredicate(this.body, predicate, true, callerLocation());
+  }
+
+  public function toThrowTypeSatisfying<T>(predicate: (value: T) => boolean): void {
+    checkFunctionThrowTypePredicate<T>(this.body, predicate, true, callerLocation());
+  }
+
+  public function toThrow(): void {
+    const location = callerLocation();
+    try {
+      const outcome = invokeFunctionExpectation(this.body);
+      if (outcome.threw) {
+        throw fmt.Errorf("expected function not to throw, got %v", outcome.exception);
+      }
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toThrowMessage(fragment: string): void {
+    const location = callerLocation();
+    try {
+      validateThrowMessage(fragment);
+      const outcome = invokeFunctionExpectation(this.body);
+      if (outcome.threw) {
+        const message = functionThrowMessage(outcome);
+        if (strings.Contains(message, fragment)) {
+          throw fmt.Errorf("expected function not to throw containing %q, got %q", fragment, message);
+        }
+      }
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toThrowCause(target: error): void {
+    const location = callerLocation();
+    try {
+      const outcome = invokeFunctionExpectation(this.body);
+      if (outcome.threw && errors.Is(outcome.exception, target)) {
+        throw fmt.Errorf("expected function not to throw matching %v (errors.Is)", target);
+      }
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toThrowType<T>(): void {
+    const location = callerLocation();
+    try {
+      const targetType = checkedErrorMatchType<T>("toThrowType");
+      const outcome = invokeFunctionExpectation(this.body);
+      const target = reflect.New(targetType);
+      if (outcome.threw && errors.As(outcome.exception, target.Interface())) {
+        throw fmt.Errorf("expected function not to throw a value assignable to %s (errors.As)", targetType.String());
+      }
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+}
+
+export class FunctionExpectation {
+  private body: () => void;
+  public not: NegatedFunctionExpectation;
+
+  constructor(body: () => void) {
+    this.body = body;
+    this.not = new NegatedFunctionExpectation(body);
+  }
+
+  public function toThrowSatisfying(predicate: (exception: error) => boolean): void {
+    checkFunctionThrowPredicate(this.body, predicate, false, callerLocation());
+  }
+
+  public function toThrowTypeSatisfying<T>(predicate: (value: T) => boolean): void {
+    checkFunctionThrowTypePredicate<T>(this.body, predicate, false, callerLocation());
+  }
+
+  public function toThrow(): error {
+    const location = callerLocation();
+    try {
+      return requireFunctionThrow(invokeFunctionExpectation(this.body));
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toThrowMessage(fragment: string): void {
+    const location = callerLocation();
+    try {
+      validateThrowMessage(fragment);
+      const outcome = invokeFunctionExpectation(this.body);
+      requireFunctionThrow(outcome);
+      const message = functionThrowMessage(outcome);
+      if (!strings.Contains(message, fragment)) {
+        throw fmt.Errorf("expected error message %q to contain %q", message, fragment);
+      }
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toThrowCause(target: error): void {
+    const location = callerLocation();
+    try {
+      expectErrorIs(requireFunctionThrow(invokeFunctionExpectation(this.body)), target);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+
+  public function toThrowType<T>(target: *T): void {
+    const location = callerLocation();
+    try {
+      validateErrorDestination<T>(target, "toThrowType");
+      expectErrorAs<T>(requireFunctionThrow(invokeFunctionExpectation(this.body)), target);
+    } catch (err: error) {
+      throw new FailureError(err, location);
+    }
+  }
+}
+
+export function expectFunction(body: () => void): FunctionExpectation {
+  return new FunctionExpectation(body);
+}
+
+function isNilValue<T>(actual: T): boolean {
+  const value = reflect.ValueOf(actual);
+  if (!value.IsValid()) {
+    return true;
+  }
+  const kind = value.Kind();
+  if (kind == reflect.Chan || kind == reflect.Func || kind == reflect.Interface || kind == reflect.Map || kind == reflect.Pointer || kind == reflect.Slice) {
+    return value.IsNil();
+  }
+  return false;
+}
+
+function checkSameValue<T>(actual: T, expected: T, negated: boolean): void {
+  const left = reflect.ValueOf(actual);
+  const right = reflect.ValueOf(expected);
+  let equal = !left.IsValid() && !right.IsValid();
+  if (left.IsValid() && right.IsValid()) {
+    if (!left.Comparable() || !right.Comparable()) {
+      throw errors.New("toBe requires comparable values; use toEqual for collections");
+    }
+    equal = left.Equal(right);
+    if (left.Type() == right.Type() && (left.Kind() == reflect.Float32 || left.Kind() == reflect.Float64)) {
+      const a = left.Float();
+      const b = right.Float();
+      equal = (math.IsNaN(a) && math.IsNaN(b)) || (a == b && (a != 0 || math.Signbit(a) == math.Signbit(b)));
+    }
+  } else if ((left.IsValid() && !left.Comparable()) || (right.IsValid() && !right.Comparable())) {
+    throw errors.New("toBe requires comparable values; use toEqual for collections");
+  }
+  if (equal == negated) {
+    if (negated) {
+      throw fmt.Errorf("did not expect the same value as %#v", diagnosticArgument(expected));
+    }
+    throw fmt.Errorf("expected the same value as %#v, got %#v", diagnosticArgument(expected), diagnosticArgument(actual));
+  }
+}
+
+export function expectEqual<T>(actual: T, expected: T): void {
+  if (!reflect.DeepEqual(actual, expected)) {
+    if (reflect.TypeOf(actual) == reflect.TypeOf(expected) && reflect.ValueOf(actual).Kind() == reflect.String) {
+      throw assertionError(fmt.Errorf("strings differ: %s", firstTextDifference(reflect.ValueOf(expected).String(), reflect.ValueOf(actual).String())));
+    }
+    throw assertionError(fmt.Errorf("expected %#v, got %#v", diagnosticArgument(expected), diagnosticArgument(actual)));
+  }
+}
+
+function firstTextDifference(expected: string, actual: string): string {
+  const expectedLines = strings.Split(expected, "\n");
+  const actualLines = strings.Split(actual, "\n");
+  let index = 0;
+  for (; index < len(expectedLines) && index < len(actualLines); index++) {
+    if (expectedLines[index] != actualLines[index]) {
+      return fmt.Sprintf("line %d: expected %q, got %q", index + 1, expectedLines[index], actualLines[index]);
+    }
+  }
+  if (index < len(expectedLines)) {
+    return fmt.Sprintf("line %d: expected %q, got end of text", index + 1, expectedLines[index]);
+  }
+  return fmt.Sprintf("line %d: expected end of text, got %q", index + 1, actualLines[index]);
+}
+
+export function expectNotEqual<T>(actual: T, unexpected: T): void {
+  if (reflect.DeepEqual(actual, unexpected)) {
+    throw assertionError(fmt.Errorf("did not expect %#v", diagnosticArgument(actual)));
+  }
+}
+
+export function expectTrue(value: boolean): void {
+  if (!value) {
+    throw assertionError(errors.New("expected true, got false"));
+  }
+}
+
+export function expectFalse(value: boolean): void {
+  if (value) {
+    throw assertionError(errors.New("expected false, got true"));
+  }
+}
+
+export function expectError(err: error): void {
+  if (err == nil) {
+    throw assertionError(errors.New("expected an error, got nil"));
+  }
+}
+
+export function expectNoError(err: error): void {
+  if (err != nil) {
+    throw assertionError(fmt.Errorf("expected no error, got %v", err));
+  }
+}
+
+export function expectErrorIs(err: error, target: error): void {
+  if (!errors.Is(err, target)) {
+    throw assertionError(fmt.Errorf("expected error %v to match %v (errors.Is)", err, target));
+  }
+}
+
+function validateErrorDestination<T>(target: *T, matcher: string): void {
+  if (target == nil) {
+    throw fmt.Errorf("%s target must not be nil", matcher);
+  }
+  const targetType = reflect.ValueOf(target).Elem().Type();
+  if (targetType.Kind() != reflect.Interface && !targetType.Implements(reflect.TypeFor<error>())) {
+    throw fmt.Errorf("%s target must point to an error type or interface, got %s", matcher, targetType.String());
+  }
+}
+
+function checkedErrorMatchType<T>(matcher: string): reflect.Type {
+  const targetType = reflect.TypeFor<T>();
+  if (targetType.Kind() != reflect.Interface && !targetType.Implements(reflect.TypeFor<error>())) {
+    throw fmt.Errorf("%s requires an error type or interface, got %s", matcher, targetType.String());
+  }
+  return targetType;
+}
+
+export function expectErrorAs<T>(err: error, target: *T): void {
+  const location = callerLocation();
+  try {
+    validateErrorDestination<T>(target, "expectErrorAs");
+  } catch (failure: error) {
+    throw new FailureError(failure, location);
+  }
+  const targetType = reflect.ValueOf(target).Elem().Type();
+  if (!errors.As(err, target)) {
+    throw assertionError(fmt.Errorf("expected error %v to contain a value assignable to %s (errors.As)", err, targetType.String()));
+  }
+}
+
+export function expectContains(value: string, fragment: string): void {
+  if (!strings.Contains(value, fragment)) {
+    throw assertionError(fmt.Errorf("expected %q to contain %q", value, fragment));
+  }
+}
+
+export function expectNotContains(value: string, fragment: string): void {
+  if (strings.Contains(value, fragment)) {
+    throw assertionError(fmt.Errorf("expected %q not to contain %q", value, fragment));
+  }
+}
+
+export function expectMatches(value: string, pattern: string): void {
+  const [matched, patternError] = regexp.MatchString(pattern, value);
+  if (patternError != nil) {
+    throw assertionError(fmt.Errorf("invalid regular expression %q: %w", pattern, patternError));
+  }
+  if (!matched) {
+    throw assertionError(fmt.Errorf("expected %q to match %q", value, pattern));
+  }
+}
+
+export function expectNotMatches(value: string, pattern: string): void {
+  const [matched, patternError] = regexp.MatchString(pattern, value);
+  if (patternError != nil) {
+    throw assertionError(fmt.Errorf("invalid regular expression %q: %w", pattern, patternError));
+  }
+  if (matched) {
+    throw assertionError(fmt.Errorf("expected %q not to match %q", value, pattern));
+  }
+}
+
+export function expectThrows(body: () => void): error {
+  if (body == nil) {
+    throw assertionError(errors.New("expectThrows body must not be nil"));
+  }
+  try {
+    body();
+  } catch (err: error) {
+    return err;
+  }
+  throw assertionError(errors.New("expected function to throw an error"));
+}
+
+export function expectThrowsMessage(body: () => void, fragment: string): void {
+  if (fragment == "") {
+    throw assertionError(errors.New("expected error message fragment must not be empty"));
+  }
+  const location = callerLocation();
+  let err: error = nil;
+  try {
+    err = expectThrows(body);
+  } catch (failure: error) {
+    throw new FailureError(failure, location);
+  }
+  if (!strings.Contains(err.Error(), fragment)) {
+    throw assertionError(fmt.Errorf("expected error message %q to contain %q", err.Error(), fragment));
+  }
+}

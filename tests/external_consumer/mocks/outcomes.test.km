@@ -1,0 +1,73 @@
+import { Suite, MockFn, MockAction, MockResult, MockActionResult, expectEqual, expectThrowsMessage } from "vasest";
+import go errors from "errors";
+
+class DependencyException extends Exception {
+  constructor(message: string) { super(message); }
+}
+
+function main(): void {
+  const suite = new Suite("mock outcomes");
+  suite.test("success: records returns and thrown errors", (): void => {
+    const load = new MockFn<string, string>((key: string): string => { return key; });
+    load.implementOnce((key: string): string => { throw errors.New("dependency unavailable"); });
+    expectThrowsMessage((): void => { load.invoke("first"); }, "unavailable");
+    expectEqual(load.invoke("second"), "second");
+    const results: MockResult<string>[] = load.results();
+    expectEqual(results[0].status, "throw");
+    expectEqual(results[0].exception.Error(), "dependency unavailable");
+    expectEqual(results[1].status, "return");
+    expectEqual(results[1].value, "second");
+    load.expectReturnedTimes(1);
+    load.expectThrownTimes(1);
+    load.expectReturnedWith("second");
+    load.expectNthReturnedWith(2, "second");
+    load.expectNthThrownMessage(1, "unavailable");
+    load.clearCalls();
+    expectEqual(len(load.results()), 0);
+  });
+  suite.test("success: preserves typed exceptions", (): void => {
+    const load = new MockFn<int, int>((key: int): int => {
+      throw new DependencyException("typed dependency failure");
+    });
+    let caught = false;
+    try {
+      load.invoke(1);
+    } catch (err: DependencyException) {
+      caught = true;
+      expectEqual(err.message, "typed dependency failure");
+    }
+    expectEqual(caught, true);
+    load.expectThrownTimes(1);
+    load.expectNthThrownMessage(1, "typed");
+  });
+  suite.test("success: records void outcomes", (): void => {
+    const send = new MockAction<string>((message: string): void => {});
+    send.implementOnce((message: string): void => { throw errors.New("notification unavailable"); });
+    expectThrowsMessage((): void => { send.invoke("first"); }, "unavailable");
+    send.invoke("second");
+    const results: MockActionResult[] = send.results();
+    expectEqual(results[0].status, "throw");
+    expectEqual(results[1].status, "return");
+    send.expectReturnedTimes(1);
+    send.expectThrownTimes(1);
+    send.expectNthThrownMessage(1, "notification");
+    send.clearCalls();
+    expectEqual(len(send.results()), 0);
+  });
+  suite.test("return value mismatch", (): void => {
+    const load = new MockFn<int, int>((key: int): int => { return key; });
+    load.invoke(1);
+    load.expectNthReturnedWith(1, 2);
+  });
+  suite.test("throw count mismatch", (): void => {
+    const load = new MockFn<int, int>((key: int): int => { return key; });
+    load.invoke(1);
+    load.expectThrownTimes(1);
+  });
+  suite.test("throw message mismatch", (): void => {
+    const send = new MockAction<string>((message: string): void => { throw errors.New("actual notification failure"); });
+    expectThrowsMessage((): void => { send.invoke("first"); }, "actual");
+    send.expectNthThrownMessage(1, "expected");
+  });
+  suite.runAndExit();
+}

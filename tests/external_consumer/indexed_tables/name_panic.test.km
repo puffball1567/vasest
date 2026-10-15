@@ -1,0 +1,15 @@
+import { Suite } from "vasest";
+import go fmt from "fmt";
+import go reflect from "reflect";
+function main(): void {
+  const suite = new Suite("indexed registration panic");
+  const rows: int[] = [42, 42];
+  suite.afterAll((): void => { fmt.Println("unreachable-name-panic-afterAll"); });
+  suite.test("earlier", (): void => { fmt.Println("unreachable-name-panic-earlier"); });
+  suite.testEachIndexed<int>(rows, (value: int, index: int): string => {
+    fmt.Printf("indexed-name-%d\n", index);
+    if (index == 1) { reflect.ValueOf(index).Index(0); }
+    return fmt.Sprint(index);
+  }, (value: int, index: int): void => { fmt.Println("unreachable-name-panic-body"); });
+  suite.runAndExit();
+}

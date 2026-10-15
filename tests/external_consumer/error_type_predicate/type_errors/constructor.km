@@ -1,0 +1,3 @@
+import { NegatedErrorExpectation } from "vasest";
+import go os from "os";
+function main(): void { new NegatedErrorExpectation(nil).toMatchTypeSatisfying<*os.PathError>((value: error): boolean => { return true; }); }

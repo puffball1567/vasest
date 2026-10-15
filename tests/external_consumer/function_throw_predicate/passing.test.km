@@ -1,0 +1,74 @@
+import { Suite, TestContext, FunctionExpectation, NegatedFunctionExpectation, expectFunction, expect, skipTest } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+
+type ErrorCode = distinct int64;
+
+class DomainError implements error {
+  public code: ErrorCode;
+  public reads: int;
+  constructor(code: ErrorCode) { this.code = code; this.reads = 0; }
+  public function Error(): string { this.reads++; throw errors.New("Error must not be called by matcher"); }
+}
+
+function main(): void {
+  const suite = new Suite("typed function throw predicates");
+  suite.test("typed bindings lazy construction and one invocation", (): void => {
+    const original = errors.New("original");
+    const wrapped = errors.Join(errors.New("other"), fmt.Errorf("wrapped: %w", original));
+    let bodies = 0;
+    let predicates = 0;
+    const body: () => void = (): void => { bodies++; throw wrapped; };
+    const predicate: (exception: error) => boolean = (exception: error): boolean => { predicates++; return exception == wrapped && errors.Is(exception, original); };
+    const matcher: FunctionExpectation = expectFunction(body);
+    expect(bodies).toEqual(0);
+    matcher.toThrowSatisfying(predicate);
+    matcher.not.toThrowSatisfying((exception: error): boolean => { predicates++; return false; });
+    new FunctionExpectation(body).toThrowSatisfying(predicate);
+    new NegatedFunctionExpectation(body).toThrowSatisfying((exception: error): boolean => { predicates++; return false; });
+    expect(bodies).toEqual(4); expect(predicates).toEqual(4);
+  });
+  suite.test("normal returns skip predicate and saved matchers evaluate again", (): void => {
+    let bodies = 0;
+    const matcher = expectFunction((): void => { bodies++; if (bodies == 1) { throw errors.New("first"); } });
+    matcher.toThrowSatisfying((exception: error): boolean => { return exception.Error() == "first"; });
+    matcher.not.toThrowSatisfying((exception: error): boolean => { fmt.Println("unreachable-normal-predicate"); return false; });
+    expect(bodies).toEqual(2);
+  });
+  suite.test("native application error references and fields", (): void => {
+    const original = new DomainError(ErrorCode(1152921504606846977));
+    const expected: error = original;
+    expectFunction((): void => { throw original; }).toThrowSatisfying((exception: error): boolean => {
+      original.code = ErrorCode(1152921504606846978);
+      return exception == expected;
+    });
+    expect(original.code).toEqual(ErrorCode(1152921504606846978));
+    // A mismatch must not call the original Error method either.
+    expectFunction((): void => {
+      expectFunction((): void => { throw original; }).toThrowSatisfying((exception: error): boolean => { return false; });
+    }).toThrowMessage("satisfying predicate");
+    expect(original.reads).toEqual(0);
+  });
+  suite.test("nil and typed nil thrown payloads", (): void => {
+    const missing: error = nil;
+    expectFunction((): void => { throw missing; }).toThrowSatisfying((exception: error): boolean => { return exception == nil; });
+    const typedNil: DomainError = nil;
+    const expectedNil: error = typedNil;
+    expectFunction((): void => { throw typedNil; }).toThrowSatisfying((exception: error): boolean => { return exception != nil && exception == expectedNil; });
+  });
+  suite.test("runtime skip from body is a thrown outcome", (): void => {
+    expectFunction((): void => { skipTest("body unavailable"); }).toThrowSatisfying((exception: error): boolean => { return exception.Error() == "body unavailable"; });
+  });
+  suite.testWithContext("predicate skip from positive matcher", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("function-throw-predicate-skip-cleanup"); });
+    expectFunction((): void => { throw errors.New("body"); }).toThrowSatisfying((exception: error): boolean => { skipTest("predicate unavailable"); return false; });
+    fmt.Println("unreachable-positive-predicate-skip");
+  });
+  suite.testWithContext("predicate skip from negative matcher", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("function-throw-predicate-skip-cleanup"); });
+    expectFunction((): void => { throw errors.New("body"); }).not.toThrowSatisfying((exception: error): boolean => { skipTest("predicate unavailable"); return true; });
+    fmt.Println("unreachable-negative-predicate-skip");
+  });
+  suite.test("later case", (): void => { fmt.Println("function-throw-predicate-passing-later"); });
+  suite.runAndExit();
+}

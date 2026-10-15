@@ -1,0 +1,2 @@
+import { MockOutcomeResult } from "vasest";
+function main(): void { const result = MockOutcomeResult { status: "throw", exception: "not an error" }; }

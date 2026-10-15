@@ -1,0 +1,22 @@
+import { Suite, TestContext, MockFn, expect } from "vasest";
+import go fmt from "fmt";
+import go reflect from "reflect";
+
+class FormattingError implements error {
+  constructor() {}
+  public function Error(): string { reflect.ValueOf(42).Index(0); return "unreachable-error-message"; }
+}
+
+function main(): void {
+  const suite = new Suite("mock throw formatting panic");
+  suite.afterEach((): void => { fmt.Println("mock-throw-format-panic-afterEach"); });
+  suite.afterAll((): void => { fmt.Println("mock-throw-format-panic-afterAll"); });
+  suite.testWithContext("native error formatting panic", (context: TestContext): void => {
+    const mock = new MockFn<int, int>((value: int): int => { return 42; });
+    mock.throwErrorOnce(new FormattingError());
+    context.cleanup((): void => { expect(mock.invoke(2)).toEqual(42); fmt.Println("mock-throw-format-panic-cleanup"); });
+    mock.invoke(1);
+  });
+  suite.test("later", (): void => { fmt.Println("unreachable-format-panic-later"); });
+  suite.runAndExit();
+}

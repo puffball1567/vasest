@@ -1,0 +1,67 @@
+import { Suite, MockFn, expectEqual, expectThrowsMessage } from "vasest";
+import go errors from "errors";
+
+struct Request {
+  public path: string;
+  public attempts: int[];
+}
+
+function useDependency(load: (request: Request) => string): string {
+  return load(Request { path: "金木犀", attempts: [1, 2] });
+}
+
+function main(): void {
+  const suite = new Suite("mock functions");
+  suite.test("success: records typed dependency calls", (): void => {
+    const load = new MockFn<Request, string>((request: Request): string => {
+      return request.path + " response";
+    });
+    expectEqual(useDependency(load.invoke), "金木犀 response");
+    load.expectCalledTimes(1);
+    load.expectCalledWith(Request { path: "金木犀", attempts: [1, 2] });
+    load.expectNthCalledWith(1, Request { path: "金木犀", attempts: [1, 2] });
+    let calls = load.calls();
+    calls[0] = Request { path: "changed", attempts: [] };
+    expectEqual(load.calls()[0].path, "金木犀");
+  });
+  suite.test("success: queued implementations fall back to default", (): void => {
+    const mock = new MockFn<int, int>((value: int): int => { return value * 2; });
+    mock.implementOnce((value: int): int => { return value + 10; });
+    mock.returnValueOnce(42);
+    mock.returnValue(7);
+    mock.clearCalls();
+    expectEqual(mock.invoke(1), 11);
+    expectEqual(mock.invoke(2), 42);
+    expectEqual(mock.invoke(3), 7);
+    mock.expectCalledTimes(3);
+    mock.clearCalls();
+    mock.expectCalledTimes(0);
+    expectEqual(mock.invoke(4), 7);
+    mock.implement((value: int): int => { return value * 3; });
+    expectEqual(mock.invoke(4), 12);
+  });
+  suite.test("success: throwing implementations remain recorded", (): void => {
+    const mock = new MockFn<string, string>((value: string): string => { return value; });
+    mock.implementOnce((value: string): string => { throw errors.New("dependency failed"); });
+    expectThrowsMessage((): void => { mock.invoke("first"); }, "dependency failed");
+    expectEqual(mock.invoke("second"), "second");
+    mock.expectCalledTimes(2);
+    mock.expectNthCalledWith(1, "first");
+  });
+  suite.test("call count mismatch", (): void => {
+    const mock = new MockFn<int, int>((value: int): int => { return value; });
+    mock.invoke(1);
+    mock.expectCalledTimes(2);
+  });
+  suite.test("argument mismatch", (): void => {
+    const mock = new MockFn<string, string>((value: string): string => { return value; });
+    mock.invoke("actual");
+    mock.expectCalledWith("expected");
+  });
+  suite.test("nth call mismatch", (): void => {
+    const mock = new MockFn<int, int>((value: int): int => { return value; });
+    mock.invoke(1);
+    mock.expectNthCalledWith(1, 2);
+  });
+  suite.runAndExit();
+}

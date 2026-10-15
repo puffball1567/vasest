@@ -1,0 +1,6 @@
+import { expectMap } from "vasest";
+function main(): void {
+  const values: Map<string, int32> = makeMap[string, int32]();
+  const wrong: int64 = 42;
+  expectMap<string, int32>(values).toHaveEntry("key", wrong);
+}

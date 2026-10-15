@@ -1,0 +1,78 @@
+import { Suite, TestContext, SliceExpectation, expectSlice, expect, skipTest } from "vasest";
+import go fmt from "fmt";
+
+type UserID = distinct int64;
+
+class Record {
+  public value: int;
+  constructor(value: int) { this.value = value; }
+}
+
+function main(): void {
+  const suite = new Suite("typed slice predicate matchers");
+  suite.test("explicit native types and short circuit evaluation", (): void => {
+    const first = UserID(1152921504606846977);
+    const values: UserID[] = [first, UserID(-1), UserID(42)];
+    let calls = 0;
+    const isPositive: (value: UserID) => boolean = (value: UserID): boolean => { calls++; return value > UserID(0); };
+    const matcher: SliceExpectation<UserID> = expectSlice<UserID>(values);
+    expect(calls).toEqual(0);
+    matcher.toSatisfyAny(isPositive);
+    expect(calls).toEqual(1);
+    matcher.not.toSatisfyAll(isPositive);
+    expect(calls).toEqual(3);
+    new SliceExpectation<UserID>(values).toSatisfyAny((value: UserID): boolean => { return value == first; });
+    expectSlice(values).not.toSatisfyAny((value: UserID): boolean => { return value == UserID(0); });
+    expectSlice(values).toSatisfyAll((value: UserID): boolean => { return value != UserID(0); });
+  });
+  suite.test("nil and empty slices need no callback invocation", (): void => {
+    const missing: int[] = nil;
+    const empty: int[] = [];
+    let calls = 0;
+    const predicate: (value: int) => boolean = (value: int): boolean => { calls++; return false; };
+    expectSlice<int>(missing).not.toSatisfyAny(predicate);
+    expectSlice<int>(missing).toSatisfyAll(predicate);
+    new SliceExpectation<int>(empty).not.toSatisfyAny(predicate);
+    new SliceExpectation<int>(empty).toSatisfyAll(predicate);
+    expect(calls).toEqual(0);
+  });
+  suite.test("application references and nested collection values", (): void => {
+    const original = new Record(42);
+    const records: Record[] = [nil, original];
+    expectSlice<Record>(records).toSatisfyAny((value: Record): boolean => {
+      if (value == nil) { return false; }
+      value.value++;
+      return value == original;
+    });
+    expect(original.value).toEqual(43);
+    const missing: int[] = nil;
+    const empty: int[] = [];
+    const nonempty: int[] = [42];
+    const nested: int[][] = [missing, empty, nonempty];
+    expectSlice<int[]>(nested).toSatisfyAny((value: int[]): boolean => { return value == nil; });
+    expectSlice<int[]>(nested).not.toSatisfyAll((value: int[]): boolean => { return len(value) == 0; });
+  });
+  suite.test("saved matchers observe native backing elements", (): void => {
+    const values: int[] = [1, 0];
+    const matcher = expectSlice<int>(values);
+    matcher.not.toSatisfyAll((value: int): boolean => { return value > 0; });
+    let calls = 0;
+    matcher.toSatisfyAll((value: int): boolean => { calls++; values[1] = 2; return value > 0; });
+    expect(calls).toEqual(2);
+    expect(values[1]).toEqual(2);
+    values[0] = -1;
+    matcher.not.toSatisfyAll((value: int): boolean => { return value > 0; });
+  });
+  suite.testWithContext("runtime skip propagates through negated any", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("slice-predicate-skip-cleanup"); });
+    expectSlice<int>([42]).not.toSatisfyAny((value: int): boolean => { skipTest("slice predicate resource unavailable"); return false; });
+    fmt.Println("unreachable-slice-predicate-skip");
+  });
+  suite.testWithContext("runtime skip propagates through positive all", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("slice-predicate-skip-cleanup"); });
+    expectSlice<int>([42]).toSatisfyAll((value: int): boolean => { skipTest("slice predicate resource unavailable"); return true; });
+    fmt.Println("unreachable-slice-predicate-skip");
+  });
+  suite.test("later case", (): void => { fmt.Println("slice-predicate-passing-later"); });
+  suite.runAndExit();
+}

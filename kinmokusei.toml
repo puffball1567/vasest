@@ -1,0 +1,14 @@
+[project]
+name = "vasest"
+version = "0.1.0"
+go-module = "github.com/puffball1567/vasest"
+go-version = "1.23"
+
+[package]
+entry = "vasest.km"
+min-kinmokusei = "0.4.3"
+backend = "go"
+license = "Apache-2.0"
+
+[target]
+cgo = "disabled"

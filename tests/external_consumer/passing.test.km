@@ -1,0 +1,34 @@
+import { Suite, expectContains, expectEqual, expectError, expectFalse, expectNoError, expectNotEqual, expectTrue } from "vasest";
+import go errors from "errors";
+
+function main(): void {
+  const suite = new Suite("basic assertions");
+  let phases: string[] = [];
+  suite.beforeAll((): void => {
+    phases = append(phases, "suite");
+  });
+  suite.afterAll((): void => {
+    phases = append(phases, "suite done");
+  });
+  suite.beforeEach((): void => {
+    phases = append(phases, "before");
+  });
+  suite.afterEach((): void => {
+    phases = append(phases, "after");
+  });
+  suite.test("equality", (): void => {
+    expectEqual(phases, ["suite", "before"]);
+    expectEqual(1 + 1, 2);
+    expectEqual(["a", "b"], ["a", "b"]);
+    expectNotEqual("left", "right");
+  });
+  suite.test("conditions and errors", (): void => {
+    expectEqual(phases, ["suite", "before", "after", "before"]);
+    expectTrue(true);
+    expectFalse(false);
+    expectError(errors.New("failure"));
+    expectNoError(nil);
+    expectContains("金木犀", "木");
+  });
+  suite.runAndExit();
+}

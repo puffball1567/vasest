@@ -1,0 +1,4 @@
+import { expectOrdered } from "vasest";
+type UserID = distinct int;
+type OrderID = distinct int;
+function main(): void { expectOrdered<UserID>(UserID(42)).not.toBeLessThan(OrderID(43)); }

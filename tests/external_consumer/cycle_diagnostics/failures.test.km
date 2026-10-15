@@ -1,0 +1,64 @@
+import { Suite, TestContext, MockFn, expect, expectSlice, expectMap, expectMock, expectMockReturn, withTestLocation } from "vasest";
+import go fmt from "fmt";
+import go debug from "runtime/debug";
+
+class Loop {
+  public label: int;
+  public children: Map<string, Loop>;
+  constructor(label: int, children: Map<string, Loop>) { this.label = label; this.children = children; }
+}
+
+class Node {
+  public next: Node;
+  constructor(next: Node) { this.next = next; }
+}
+
+function main(): void {
+  debug.SetMaxStack(1048576);
+  const children: Map<string, Loop> = makeMap[string, Loop]();
+  const value = new Loop(42, children);
+  const other = new Loop(43, children);
+  children["self"] = value;
+  const rows: Loop[] = [value];
+  const required: Loop[] = [value];
+  const different: Loop[] = [other];
+  const mock = new MockFn<Loop, Loop>((argument: Loop): Loop => { return argument; });
+  mock.invoke(value);
+  const suite = new Suite("cyclic value failures");
+  suite.afterEach((): void => { fmt.Println("cycle-diagnostic-afterEach"); });
+  suite.afterAll((): void => { fmt.Println("cycle-diagnostic-afterAll"); });
+  suite.testWithContext("equality", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("cycle-diagnostic-cleanup"); });
+    expect<Loop>(value).toEqual(other);
+  });
+  suite.test("negated equality", (): void => { expect<Loop>(value).not.toEqual(value); });
+  suite.test("nil", (): void => { expect<Loop>(value).toBeNil(); });
+  suite.test("predicate", (): void => { expect<Loop>(value).toSatisfy((actual: Loop): boolean => { return false; }); });
+  suite.test("slice contains", (): void => { expectSlice<Loop>(rows).toContain(other); });
+  suite.test("slice subset", (): void => { expectSlice<Loop>(rows).not.toContainAll(required); });
+  suite.test("slice unordered", (): void => { expectSlice<Loop>(rows).toEqualUnordered(different); });
+  suite.test("map entry", (): void => { expectMap<string, Loop>(children).toHaveEntry("self", other); });
+  suite.test("mock calls", (): void => { expectMock<Loop>(mock).toHaveBeenNthCalledWith(1, other); });
+  suite.test("mock returns", (): void => { expectMockReturn<Loop>(mock).toHaveNthReturnedWith(1, other); });
+  suite.test("legacy mock calls", (): void => { mock.expectCalledWith(other); });
+  suite.test("legacy mock returns", (): void => { mock.expectReturnedWith(other); });
+  suite.test("explicit location", (): void => {
+    withTestLocation("domain-check.km", 42, (): void => { expect<Loop>(value).toEqual(other); });
+  });
+  suite.test("diagnostic depth limit", (): void => {
+    let node: Node = nil;
+    for (let index = 0; index < 100; index++) { node = new Node(node); }
+    expect<Node>(node).not.toEqual(node);
+  });
+  suite.test("diagnostic breadth limit", (): void => {
+    let values: int[] = [];
+    for (let index = 0; index < 5000; index++) { values = append(values, index); }
+    expectSlice<int>(values).not.toContain(int(0));
+  });
+  suite.test("later case", (): void => {
+    expect(mock.callCount()).toEqual(1);
+    expect(children["self"].label).toEqual(42);
+    fmt.Println("cycle-diagnostic-failing-later");
+  });
+  suite.runAndExit();
+}

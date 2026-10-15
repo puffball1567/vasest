@@ -1,0 +1,122 @@
+import { Suite, TestContext, MockFn, MockAction, expect, expectMock, expectMockReturn, expectMockOutcome, expectFunction, skipTest } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+
+type UserID = distinct int64;
+class DomainError implements error {
+  public code: UserID;
+  public reads: int;
+  constructor(code: UserID) { this.code = code; this.reads = 0; }
+  public function Error(): string { this.reads++; throw errors.New("unexpected Error call"); }
+}
+
+function main(): void {
+  const suite = new Suite("typed mock throw behavior");
+  suite.test("function mixed queue default and typed invocation binding", (): void => {
+    let defaults = 0;
+    const first = errors.New("queued");
+    const repeated = errors.New("default");
+    const mock = new MockFn<UserID, UserID>((value: UserID): UserID => { defaults++; return value; });
+    const call: (value: UserID) => UserID = mock.invoke;
+    mock.returnValueOnce(UserID(1152921504606846977));
+    const queueError: (exception: error) => void = mock.throwErrorOnce;
+    queueError(first);
+    mock.implementOnce((value: UserID): UserID => { return value + UserID(1); });
+    mock.throwError(repeated);
+    expect(defaults).toEqual(0); expect(mock.callCount()).toEqual(0);
+    expect(call(UserID(40))).toEqual(UserID(1152921504606846977));
+    expectFunction((): void => { call(UserID(41)); }).toThrowSatisfying((value: error): boolean => { return value == first; });
+    expect(call(UserID(42))).toEqual(UserID(43));
+    expectFunction((): void => { call(UserID(44)); }).toThrowSatisfying((value: error): boolean => { return value == repeated; });
+    expectMock<UserID>(mock).toHaveBeenCalledWith(UserID(44));
+    expectMockReturn<UserID>(mock).toHaveReturnedTimes(2); expectMockOutcome(mock).toHaveThrownTimes(2);
+    mock.returnValue(UserID(1152921504606846978)); expect(call(UserID(45))).toEqual(UserID(1152921504606846978));
+    expect(defaults).toEqual(0);
+  });
+  suite.test("action queues native error reference and fields", (): void => {
+    const original = new DomainError(UserID(1152921504606846977));
+    let total = UserID(0);
+    const mock = new MockAction<UserID>((value: UserID): void => { total += value; });
+    const call: (value: UserID) => void = mock.invoke;
+    mock.implementOnce((value: UserID): void => { total += value; });
+    mock.throwErrorOnce(original);
+    const setDefaultError: (exception: error) => void = mock.throwError;
+    setDefaultError(original);
+    original.code = UserID(1152921504606846978);
+    call(UserID(1));
+    expectFunction((): void => { call(UserID(2)); }).toThrowTypeSatisfying<DomainError>((value: DomainError): boolean => { return value == original && value.code == UserID(1152921504606846978); });
+    expectFunction((): void => { call(UserID(3)); }).toThrowTypeSatisfying<DomainError>((value: DomainError): boolean => { return value == original; });
+    expectMockOutcome(mock).toHaveLastThrownTypeSatisfying<DomainError>((value: DomainError): boolean => { return value == original; });
+    expect(total).toEqual(UserID(1)); expect(original.reads).toEqual(0);
+    mock.implement((value: UserID): void => { total += value; }); call(UserID(4)); expect(total).toEqual(UserID(5));
+  });
+  suite.test("nil and typed nil remain throw payloads", (): void => {
+    const missing: error = nil;
+    const typedNil: DomainError = nil;
+    const expected: error = typedNil;
+    const mock = new MockFn<int, string>((value: int): string => { return "normal"; });
+    const action = new MockAction<int>((value: int): void => {});
+    mock.throwErrorOnce(missing); action.throwErrorOnce(missing);
+    expectFunction((): void => { mock.invoke(1); }).toThrowSatisfying((value: error): boolean => { return value == nil; });
+    expectFunction((): void => { action.invoke(1); }).toThrowSatisfying((value: error): boolean => { return value == nil; });
+    expect(mock.invoke(2)).toEqual("normal"); action.invoke(2);
+    mock.throwError(typedNil); action.throwError(typedNil);
+    expectFunction((): void => { mock.invoke(3); }).toThrowSatisfying((value: error): boolean => { return value != nil && value == expected; });
+    expectFunction((): void => { action.invoke(3); }).toThrowTypeSatisfying<DomainError>((value: DomainError): boolean => { return value == nil; });
+    expectMockOutcome(mock).toHaveThrownTimes(2); expectMockOutcome(action).toHaveThrownTimes(2);
+  });
+  suite.test("clear retains queues reset replaces behavior and saved histories", (): void => {
+    const cause = errors.New("configured");
+    const mock = new MockFn<int, error>((value: int): error => { return nil; });
+    mock.invoke(0);
+    const previous = mock.results();
+    const matcher = expectMockOutcome(mock);
+    mock.throwErrorOnce(cause); mock.throwError(cause); mock.clearCalls();
+    matcher.not.toHaveThrown(); expect(len(previous)).toEqual(1);
+    expectFunction((): void => { mock.invoke(1); }).toThrowCause(cause);
+    expectFunction((): void => { mock.invoke(2); }).toThrowCause(cause);
+    mock.throwErrorOnce(cause); mock.reset((value: int): error => { return cause; });
+    matcher.not.toHaveThrown(); expect<error>(mock.invoke(3)).toBe(cause); matcher.toHaveReturnedTimes(1);
+    const action = new MockAction<int>((value: int): void => {});
+    action.throwErrorOnce(cause); action.throwError(cause); action.clearCalls();
+    expectFunction((): void => { action.invoke(1); }).toThrowCause(cause);
+    action.reset((value: int): void => {}); action.invoke(2); expectMockOutcome(action).not.toHaveThrown();
+  });
+  suite.test("reentrant configuration preserves captured callback", (): void => {
+    const first = errors.New("queued");
+    const repeated = errors.New("default");
+    const mock = new MockFn<int, int>((value: int): int => { return value; });
+    mock.implement((value: int): int => {
+      mock.throwErrorOnce(first); mock.throwError(repeated);
+      expectFunction((): void => { mock.invoke(value + 1); }).toThrowCause(first);
+      return value + 2;
+    });
+    expect(mock.invoke(40)).toEqual(42);
+    expectFunction((): void => { mock.invoke(43); }).toThrowCause(repeated);
+    expectMockOutcome(mock).toHaveReturnedTimes(1); expectMockOutcome(mock).toHaveThrownTimes(2);
+  });
+  suite.test("wrapped and joined causes remain native", (): void => {
+    const cause = errors.New("cause");
+    const wrapped = errors.Join(errors.New("other"), fmt.Errorf("wrapped: %w", cause));
+    const mock = new MockFn<int, int>((value: int): int => { return value; });
+    mock.throwError(wrapped);
+    expectFunction((): void => { mock.invoke(1); }).toThrowSatisfying((value: error): boolean => { return value == wrapped && errors.Is(value, cause); });
+    expectMockOutcome(mock).toHaveLastThrownCause(cause);
+  });
+  suite.testWithContext("one-shot function skip", (context: TestContext): void => {
+    const mock = new MockFn<int, int>((value: int): int => { return 42; });
+    const signal = expectFunction((): void => { skipTest("mock unavailable"); }).toThrow();
+    mock.throwErrorOnce(signal);
+    context.cleanup((): void => { expect(mock.invoke(2)).toEqual(42); fmt.Println("mock-throw-behavior-skip-cleanup"); });
+    mock.invoke(1); fmt.Println("unreachable-function-skip");
+  });
+  suite.testWithContext("default action skip", (context: TestContext): void => {
+    const mock = new MockAction<int>((value: int): void => {});
+    const signal = expectFunction((): void => { skipTest("mock unavailable"); }).toThrow();
+    mock.throwError(signal);
+    context.cleanup((): void => { expectFunction((): void => { mock.invoke(2); }).toThrow(); fmt.Println("mock-throw-behavior-skip-cleanup"); });
+    mock.invoke(1); fmt.Println("unreachable-action-skip");
+  });
+  suite.test("later case", (): void => { fmt.Println("mock-throw-behavior-passing-later"); });
+  suite.runAndExit();
+}

@@ -1,0 +1,48 @@
+import { Suite, TestContext, MockAction, MockOutcomeSource, MockOutcomeResult, expectMockOutcome, expectFunction, withTestLocation } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+import go os from "os";
+
+class FailingSource implements MockOutcomeSource {
+  constructor() {}
+  public function outcomes(): MockOutcomeResult[] { throw errors.New("source failed"); }
+}
+
+function main(): void {
+  const suite = new Suite("mock type predicate failures");
+  const mock = new MockAction<int>((value: int): void => { throw errors.New("body"); });
+  expectFunction((): void => { mock.invoke(1); }).toThrow();
+  const matcher = expectMockOutcome(mock);
+  const empty = expectMockOutcome(new MockAction<int>((value: int): void => {}));
+  const yes: (value: error) => boolean = (value: error): boolean => { return true; };
+  const no: (value: error) => boolean = (value: error): boolean => { return false; };
+  suite.afterEach((): void => { fmt.Println("mock-type-predicate-afterEach"); });
+  suite.testWithContext("positive any mismatch", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("mock-type-predicate-cleanup"); });
+    matcher.toHaveThrownTypeSatisfying<error>(no);
+  });
+  suite.test("negative any match", (): void => { matcher.not.toHaveThrownTypeSatisfying<error>(yes); });
+  suite.test("positive nth mismatch", (): void => { matcher.toHaveNthThrownTypeSatisfying<error>(1, no); });
+  suite.test("negative nth match", (): void => { matcher.not.toHaveNthThrownTypeSatisfying<error>(1, yes); });
+  suite.test("positive last mismatch", (): void => { matcher.toHaveLastThrownTypeSatisfying<error>(no); });
+  suite.test("negative last match", (): void => { matcher.not.toHaveLastThrownTypeSatisfying<error>(yes); });
+  suite.test("missing positive type", (): void => { matcher.toHaveThrownTypeSatisfying<*os.PathError>((value: *os.PathError): boolean => { fmt.Println("unreachable-missing-type-predicate"); return true; }); });
+  suite.test("missing nth invocation", (): void => { matcher.toHaveNthThrownTypeSatisfying<error>(2, yes); });
+  suite.test("missing last invocation", (): void => { empty.toHaveLastThrownTypeSatisfying<error>(yes); });
+  suite.test("nil any predicate", (): void => { matcher.toHaveThrownTypeSatisfying<error>(nil); });
+  suite.test("nil negative nth predicate", (): void => { matcher.not.toHaveNthThrownTypeSatisfying<error>(1, nil); });
+  suite.test("nil last predicate", (): void => { matcher.toHaveLastThrownTypeSatisfying<error>(nil); });
+  suite.test("invalid any type", (): void => { empty.toHaveThrownTypeSatisfying<int>((value: int): boolean => { fmt.Println("unreachable-invalid-type-predicate"); return true; }); });
+  suite.test("invalid negative nth type", (): void => { empty.not.toHaveNthThrownTypeSatisfying<int>(1, (value: int): boolean => { fmt.Println("unreachable-invalid-type-predicate"); return false; }); });
+  suite.test("invalid last type", (): void => { empty.toHaveLastThrownTypeSatisfying<int>((value: int): boolean => { fmt.Println("unreachable-invalid-type-predicate"); return true; }); });
+  suite.test("invalid nth index", (): void => { matcher.toHaveNthThrownTypeSatisfying<error>(0, yes); });
+  suite.test("invalid negative nth index", (): void => { matcher.not.toHaveNthThrownTypeSatisfying<error>(-1, yes); });
+  suite.test("nil any source", (): void => { expectMockOutcome(nil).toHaveThrownTypeSatisfying<error>(yes); });
+  suite.test("nil negative nth source", (): void => { expectMockOutcome(nil).not.toHaveNthThrownTypeSatisfying<error>(1, yes); });
+  suite.test("typed nil last source", (): void => { const missing: MockAction<int> = nil; expectMockOutcome(missing).toHaveLastThrownTypeSatisfying<error>(yes); });
+  suite.test("raw predicate throw", (): void => { matcher.toHaveNthThrownTypeSatisfying<error>(1, (value: error): boolean => { throw errors.New("predicate failed"); }); });
+  suite.test("explicit predicate location", (): void => { matcher.not.toHaveLastThrownTypeSatisfying<error>((value: error): boolean => { withTestLocation("predicate.km", 42, (): void => { throw errors.New("predicate failed explicitly"); }); return false; }); });
+  suite.test("raw source throw", (): void => { expectMockOutcome(new FailingSource()).toHaveThrownTypeSatisfying<error>(yes); });
+  suite.test("later case", (): void => { fmt.Println("mock-type-predicate-failing-later"); });
+  suite.runAndExit();
+}

@@ -1,0 +1,11 @@
+import { Suite, expect } from "vasest";
+import go fmt from "fmt";
+
+function main(): void {
+  const suite = new Suite("after inherited output");
+  suite.test("later file", (): void => {
+    expect<int>(42).toEqual(42);
+    fmt.Println("pipe-later-file");
+  });
+  suite.runAndExit();
+}

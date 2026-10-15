@@ -1,0 +1,27 @@
+name: Main pull request policy
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  require-approved-source:
+    name: Require approved main source
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify pull request source
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -eu
+          test "$HEAD_REPOSITORY" = "$REPOSITORY"
+          case "$HEAD_REF" in
+            devel|hotfix/*) ;;
+            *) echo "::error::Pull requests to main must come from devel or hotfix/*."; exit 1 ;;
+          esac

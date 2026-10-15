@@ -1,0 +1,11 @@
+import { Suite, expect } from "vasest";
+import go fmt from "fmt";
+
+function main(): void {
+  const suite = new Suite("unrelated file");
+  suite.test("passes", (): void => {
+    expect<string>("{\"name\":1,\"name\":2}").toEqual("{\"name\":1,\"name\":2}");
+    fmt.Println("json-fields-unrelated");
+  });
+  suite.runAndExit();
+}

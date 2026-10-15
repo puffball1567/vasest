@@ -1,0 +1,18 @@
+import { Suite, TestContext, expect } from "vasest";
+import go fmt from "fmt";
+import go reflect from "reflect";
+
+function main(): void {
+  const suite = new Suite("predicate native panic");
+  suite.afterEach((): void => { fmt.Println("predicate-panic-afterEach"); });
+  suite.afterAll((): void => { fmt.Println("predicate-panic-afterAll"); });
+  suite.testWithContext("native predicate panic", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("predicate-panic-cleanup"); });
+    expect(42).not.toSatisfy((value: int): boolean => {
+      reflect.ValueOf(value).Index(0);
+      return false;
+    });
+  });
+  suite.test("later case", (): void => { fmt.Println("unreachable-predicate-panic-later"); });
+  suite.runAndExit();
+}

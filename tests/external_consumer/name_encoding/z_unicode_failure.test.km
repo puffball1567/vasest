@@ -1,0 +1,16 @@
+import { Suite, expect } from "vasest";
+import go fmt from "fmt";
+import go os from "os";
+
+function main(): void {
+  const suite = new Suite(" 金木犀 � <&> 😀 ");
+  suite.test(" � 名前\n<&> 😀 \\ud800 ", (): void => {
+    fmt.Println("encoding-exact-rerun");
+    if (os.Getenv("VASEST_ENCODING_FIXED") == "1") {
+      expect<int>(42).toEqual(42);
+    } else {
+      expect<int>(1).toEqual(2);
+    }
+  });
+  suite.runAndExit();
+}

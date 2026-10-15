@@ -1,0 +1,11 @@
+import { Suite, expect } from "vasest";
+import go fmt from "fmt";
+
+function main(): void {
+  const suite = new Suite("regular discovery");
+  suite.test("passing case", (): void => {
+    expect<int>(42).toEqual(42);
+    fmt.Println("regular-discovery-body");
+  });
+  suite.runAndExit();
+}

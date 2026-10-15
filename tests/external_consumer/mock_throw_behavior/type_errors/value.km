@@ -1,0 +1,3 @@
+import { MockFn } from "vasest";
+import go os from "os";
+function main(): void { const cause = os.PathError { Op: "open", Path: "missing", Err: os.ErrNotExist }; new MockFn<int, int>((value: int): int => { return value; }).throwErrorOnce(cause); }

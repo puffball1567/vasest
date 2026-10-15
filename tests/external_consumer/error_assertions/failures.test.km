@@ -1,0 +1,41 @@
+import { Suite, TestContext, expectErrorAs, expectErrorIs, withTestLocation } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+import go os from "os";
+
+function main(): void {
+  const suite = new Suite("error assertion failures");
+  suite.afterEach((): void => {
+    fmt.Println("error-afterEach");
+  });
+  suite.testWithContext("wrong cause", (context: TestContext): void => {
+    context.cleanup((): void => {
+      fmt.Println("error-cleanup");
+    });
+    withTestLocation("error-checks.test.km", 10, (): void => {
+      expectErrorIs(errors.New("same message"), errors.New("same message"));
+    });
+  });
+  suite.test("wrong type", (): void => {
+    let found: *os.PathError = nil;
+    withTestLocation("error-checks.test.km", 20, (): void => {
+      expectErrorAs(errors.New("ordinary error"), &found);
+    });
+  });
+  suite.test("invalid target", (): void => {
+    let found = 0;
+    withTestLocation("error-checks.test.km", 30, (): void => {
+      expectErrorAs(errors.New("ordinary error"), &found);
+    });
+  });
+  suite.test("nil target", (): void => {
+    let found: *error = nil;
+    withTestLocation("error-checks.test.km", 40, (): void => {
+      expectErrorAs(nil, found);
+    });
+  });
+  suite.test("later case", (): void => {
+    fmt.Println("error-later-case");
+  });
+  suite.runAndExit();
+}

@@ -1,0 +1,63 @@
+import { Suite, TestContext, expectEqual, expectNoError, expectTrue, expectThrowsMessage } from "vasest";
+import go errors from "errors";
+import go os from "os";
+
+function main(): void {
+  const suite = new Suite("registered cleanup");
+  let savedPath = "";
+  let resourceActive = false;
+  let hookFails = false;
+  const [previousEnv, envExisted] = os.LookupEnv("VASEST_CONTEXT_FIXTURE");
+  suite.afterEach((): void => {
+    if (resourceActive) {
+      const [info, statError] = os.Stat(savedPath);
+      expectNoError(statError);
+      expectTrue(info.IsDir());
+      expectEqual(os.Getenv("VASEST_CONTEXT_FIXTURE"), "temporary");
+    }
+    if (hookFails) {
+      hookFails = false;
+      throw errors.New("hook failure");
+    }
+  });
+  suite.afterAll((): void => {
+    if (savedPath != "") {
+      const [info, statError] = os.Stat(savedPath);
+      expectTrue(os.IsNotExist(statError));
+    }
+    const [restoredEnv, restoredExists] = os.LookupEnv("VASEST_CONTEXT_FIXTURE");
+    expectEqual(restoredExists, envExisted);
+    expectEqual(restoredEnv, previousEnv);
+  });
+  suite.testWithContext("success: keeps resources through afterEach", (context: TestContext): void => {
+    const path = context.tempDir();
+    context.setEnv("VASEST_CONTEXT_FIXTURE", "temporary");
+    savedPath = path;
+    resourceActive = true;
+    context.cleanup((): void => {
+      resourceActive = false;
+    });
+    expectThrowsMessage((): void => { context.cleanup(nil); }, "cleanup body must not be nil");
+  });
+  suite.testWithContext("success: cleanup can register more work", (context: TestContext): void => {
+    let order: string[] = [];
+    context.cleanup((): void => { expectEqual(order, ["second", "nested"]); });
+    context.cleanup((): void => {
+      order = append(order, "second");
+      context.cleanup((): void => { order = append(order, "nested"); });
+    });
+  });
+  suite.testWithContext("body hook and cleanup failures", (context: TestContext): void => {
+    hookFails = true;
+    context.cleanup((): void => { throw errors.New("first cleanup"); });
+    context.cleanup((): void => { throw errors.New("second cleanup"); });
+    throw errors.New("body failure");
+  });
+  suite.testWithContext("empty cleanup error", (context: TestContext): void => {
+    context.cleanup((): void => { throw errors.New(""); });
+  });
+  suite.testWithContext("cleanup assertion failure", (context: TestContext): void => {
+    context.cleanup((): void => { expectEqual(1, 2); });
+  });
+  suite.runAndExit();
+}

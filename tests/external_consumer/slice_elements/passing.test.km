@@ -1,0 +1,97 @@
+import { Suite, TestContext, SliceExpectation, NegatedSliceExpectation, expectSlice, expect, skipTest } from "vasest";
+import go fmt from "fmt";
+import go math from "math";
+
+type UserID = distinct uint64;
+
+class Node {
+  public value: int;
+  public next: Node;
+  constructor(value: int) { this.value=value;this.next=nil; }
+}
+
+function main(): void {
+  const suite = new Suite("typed selected slice elements");
+  suite.test("native values constructors and typed bindings", (): void => {
+    const large = UserID(18446744073709551615);
+    const values: UserID[] = [large, UserID(42)];
+    const matcher: SliceExpectation<UserID> = expectSlice<UserID>(values);
+    const equal: (index: int, expected: UserID) => void = matcher.toHaveElement;
+    const predicate: (index: int, predicate: (value: UserID) => boolean) => void = matcher.toHaveElementSatisfying;
+    const negative: (index: int, expected: UserID) => void = matcher.not.toHaveElement;
+    const negativePredicate: (index: int, predicate: (value: UserID) => boolean) => void = matcher.not.toHaveElementSatisfying;
+    equal(0,large);
+    predicate(0,(value: UserID): boolean => {return value==large;});
+    negative(1,large);
+    negativePredicate(1,(value: UserID): boolean => {return value==large;});
+    new SliceExpectation<UserID>(values).toHaveElement(0,large);
+    new NegatedSliceExpectation<UserID>(values).toHaveElement(2,large);
+    expectSlice(values).toHaveElement(1,UserID(42));
+  });
+  suite.test("missing zero and nil elements", (): void => {
+    const missing: int[] = nil;
+    const empty: int[] = [];
+    let calls=0;
+    const predicate: (value: int) => boolean = (value: int): boolean => {calls++;return true;};
+    expectSlice<int>(missing).not.toHaveElement(0,0);
+    expectSlice<int>(empty).not.toHaveElement(0,0);
+    expectSlice<int>([0]).toHaveElement(0,0);
+    expectSlice<int>([0]).not.toHaveElement(2147483647,0);
+    expectSlice<int>(missing).not.toHaveElementSatisfying(0,predicate);
+    expectSlice<int>(empty).not.toHaveElementSatisfying(0,predicate);
+    expect<int>(calls).toEqual(0);
+    expectSlice<int>([0]).toHaveElementSatisfying(0,predicate);
+    expect<int>(calls).toEqual(1);
+  });
+  suite.test("native nested values cycles and NaN", (): void => {
+    const missing: int[] = nil;
+    const empty: int[] = [];
+    const nested: int[][] = [missing,empty,[42]];
+    expectSlice<int[]>(nested).toHaveElement(0,missing);
+    expectSlice<int[]>(nested).not.toHaveElement(0,empty);
+    expectSlice<int[]>(nested).toHaveElementSatisfying(1,(value: int[]): boolean => {return value!=nil&&len(value)==0;});
+    const first=new Node(42);
+    const second=new Node(42);
+    first.next=first;second.next=second;
+    const nodes: Node[]=[nil,first];
+    expectSlice<Node>(nodes).toHaveElement(0,nil);
+    expectSlice<Node>(nodes).toHaveElement(1,second);
+    expectSlice<Node>(nodes).toHaveElementSatisfying(1,(value: Node): boolean=>{value.value++;return value==first;});
+    expect<int>(first.value).toEqual(43);
+    const nans: float64[]=[math.NaN()];
+    expectSlice<float64>(nans).not.toHaveElement(0,nans[0]);
+  });
+  suite.test("one read and callback evaluation per selected position", (): void => {
+    const values: int64[]=[int64(1152921504606846977)];
+    let calls=0;
+    const matcher=expectSlice<int64>(values);
+    matcher.toHaveElementSatisfying(0,(value: int64): boolean=>{
+      calls++;values[0]=int64(-1);return value==int64(1152921504606846977);
+    });
+    matcher.not.toHaveElementSatisfying(0,(value: int64): boolean=>{
+      calls++;values[0]=int64(42);return value>0;
+    });
+    expect<int>(calls).toEqual(2);
+    matcher.toHaveElement(0,int64(42));
+  });
+  suite.test("saved matchers observe captured backing elements", (): void => {
+    let values: int[]=[1,2];
+    const matcher=expectSlice<int>(values);
+    values[1]=3;
+    matcher.toHaveElement(1,3);
+    values=[0];
+    matcher.toHaveElement(1,3);
+  });
+  suite.testWithContext("runtime skip from positive predicate", (context: TestContext): void=>{
+    context.cleanup(():void=>{fmt.Println("slice-element-skip-cleanup");});
+    expectSlice<int>([42]).toHaveElementSatisfying(0,(value:int):boolean=>{skipTest("selected element resource unavailable");return false;});
+    fmt.Println("unreachable-slice-element-skip");
+  });
+  suite.testWithContext("runtime skip from negative predicate", (context: TestContext): void=>{
+    context.cleanup(():void=>{fmt.Println("slice-element-skip-cleanup");});
+    expectSlice<int>([42]).not.toHaveElementSatisfying(0,(value:int):boolean=>{skipTest("selected element resource unavailable");return false;});
+    fmt.Println("unreachable-slice-element-skip");
+  });
+  suite.test("later case",():void=>{fmt.Println("slice-element-passing-later");});
+  suite.runAndExit();
+}

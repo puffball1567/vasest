@@ -1,0 +1,21 @@
+import { Suite, expectApprox, expectMatches, expectNotContains, expectTrue, fail, runSuiteAndExit } from "vasest";
+
+function main(): void {
+  runSuiteAndExit("assertion failures", (suite: Suite): void => {
+    suite.test("invalid regex", (): void => {
+      expectMatches("value", "[");
+    });
+    suite.test("unexpected substring", (): void => {
+      expectNotContains("value", "alu");
+    });
+    suite.test("approximate mismatch", (): void => {
+      expectApprox(1.5, 1.0, 0.1);
+    });
+    suite.test("explicit failure", (): void => {
+      fail("intentional failure");
+    });
+    suite.test("later case still runs", (): void => {
+      expectTrue(true);
+    });
+  });
+}

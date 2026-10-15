@@ -1,0 +1,99 @@
+import { Suite, MockFn, MockResult, MockReturnSource, MockReturnExpectation, expectMockReturn, expect, expectFunction } from "vasest";
+import go errors from "errors";
+
+type UserID = distinct int64;
+
+class Record {
+  public value: int;
+  constructor(value: int) { this.value = value; }
+}
+
+class Spy implements MockReturnSource<UserID> {
+  public reads: int;
+  constructor() { this.reads = 0; }
+  public function results(): MockResult<UserID>[] {
+    this.reads++;
+    const result = MockResult<UserID> { status: "return", value: UserID(42), exception: nil };
+    return [result];
+  }
+}
+
+function main(): void {
+  const suite = new Suite("typed mock return matchers");
+  suite.test("explicit nominal types and live return history", (): void => {
+    let invoked = 0;
+    const mock = new MockFn<int, UserID>((value: int): UserID => { invoked++; return UserID(value); });
+    mock.returnValueOnce(UserID(1152921504606846977));
+    const matcher: MockReturnExpectation<UserID> = expectMockReturn<UserID>(mock);
+    matcher.not.toHaveReturned();
+    matcher.toHaveReturnedTimes(0);
+    matcher.not.toHaveReturnedWith(UserID(0));
+    matcher.not.toHaveNthReturnedWith(1, UserID(0));
+    matcher.not.toHaveLastReturnedWith(UserID(0));
+    expect(invoked).toEqual(0);
+    expect(mock.invoke(42)).toEqual(UserID(1152921504606846977));
+    matcher.toHaveReturned();
+    matcher.toHaveReturnedTimes(1);
+    matcher.toHaveReturnedWith(UserID(1152921504606846977));
+    matcher.toHaveNthReturnedWith(1, UserID(1152921504606846977));
+    matcher.toHaveLastReturnedWith(UserID(1152921504606846977));
+    mock.invoke(43);
+    matcher.not.toHaveReturnedTimes(1);
+    matcher.not.toHaveReturnedWith(UserID(44));
+    matcher.not.toHaveNthReturnedWith(1, UserID(43));
+    matcher.not.toHaveNthReturnedWith(3, UserID(0));
+    matcher.not.toHaveLastReturnedWith(UserID(1152921504606846977));
+    matcher.toHaveLastReturnedWith(UserID(43));
+    new MockReturnExpectation<UserID>(mock).toHaveReturnedTimes(2);
+    expectMockReturn(mock).toHaveReturnedWith(UserID(43));
+    mock.clearCalls();
+    matcher.not.toHaveReturned();
+    expect(invoked).toEqual(1);
+  });
+  suite.test("nil and empty return values stay distinct", (): void => {
+    const mock = new MockFn<int, int[]>((value: int): int[] => { return nil; });
+    const empty: int[] = [];
+    mock.invoke(1);
+    expectMockReturn<int[]>(mock).toHaveReturnedWith(nil);
+    expectMockReturn<int[]>(mock).not.toHaveReturnedWith(empty);
+    expectMockReturn<int[]>(mock).not.toHaveNthReturnedWith(1, empty);
+    expectMockReturn<int[]>(mock).not.toHaveLastReturnedWith(empty);
+    mock.returnValue(empty);
+    mock.invoke(2);
+    expectMockReturn<int[]>(mock).toHaveLastReturnedWith(empty);
+  });
+  suite.test("class return values use deep equality", (): void => {
+    const record = new Record(42);
+    const mock = new MockFn<int, Record>((value: int): Record => { return record; });
+    mock.invoke(1);
+    expectMockReturn<Record>(mock).toHaveReturnedWith(new Record(42));
+    record.value = 43;
+    new MockReturnExpectation<Record>(mock).toHaveLastReturnedWith(new Record(43));
+  });
+  suite.test("throws do not return zero values", (): void => {
+    const mock = new MockFn<int, int>((value: int): int => { return value; });
+    mock.implementOnce((value: int): int => { throw errors.New("return mock failed"); });
+    expectFunction((): void => { mock.invoke(1); }).toThrowMessage("return mock failed");
+    expectMockReturn<int>(mock).not.toHaveReturned();
+    expectMockReturn<int>(mock).not.toHaveReturnedWith(0);
+    expectMockReturn<int>(mock).not.toHaveNthReturnedWith(1, 0);
+    expectMockReturn<int>(mock).not.toHaveLastReturnedWith(0);
+    mock.invoke(0);
+    expectMockReturn<int>(mock).toHaveReturnedTimes(1);
+    expectMockReturn<int>(mock).toHaveNthReturnedWith(2, 0);
+    mock.implementOnce((value: int): int => { throw errors.New("last mock failed"); });
+    expectFunction((): void => { mock.invoke(3); }).toThrowMessage("last mock failed");
+    expectMockReturn<int>(mock).not.toHaveLastReturnedWith(0);
+  });
+  suite.test("typed custom result sources read once", (): void => {
+    const spy = new Spy();
+    const source: MockReturnSource<UserID> = spy;
+    expectMockReturn<UserID>(source).toHaveReturnedWith(UserID(42));
+    expect(spy.reads).toEqual(1);
+    expectMockReturn(spy).toHaveLastReturnedWith(UserID(42));
+    expect(spy.reads).toEqual(2);
+    new MockReturnExpectation<UserID>(source).not.toHaveNthReturnedWith(2, UserID(42));
+    expect(spy.reads).toEqual(3);
+  });
+  suite.runAndExit();
+}

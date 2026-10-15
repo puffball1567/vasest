@@ -1,0 +1,5 @@
+import { expectSlice, SliceExpectation, NegatedSliceExpectation } from "vasest";
+function main(): void {
+  const values: int64[] = [int64(42)];
+  const check: (expected: int64[]) => int = expectSlice<int64>(values).toEndWith;
+}

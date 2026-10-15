@@ -1,0 +1,53 @@
+import { Suite, TestContext, expectEqual, expectNoError, skipTest } from "vasest";
+import go fmt from "fmt";
+import go os from "os";
+
+function main(): void {
+  const original = os.Getenv("VASEST_RUNTIME_RESOURCE");
+  const suite = new Suite("conditional tests");
+  suite.afterEach((): void => {
+    fmt.Println("conditional-afterEach");
+  });
+  suite.testWithContext("body skipped", (context: TestContext): void => {
+    const path = context.tempDir();
+    context.setEnv("VASEST_RUNTIME_RESOURCE", path);
+    context.cleanup((): void => {
+      const [info, statError] = os.Stat(path);
+      expectNoError(statError);
+      expectEqual(os.Getenv("VASEST_RUNTIME_RESOURCE"), path);
+      fmt.Println("body-resource-cleanup");
+    });
+    skipTest("service <&> unavailable");
+    fmt.Println("unreachable-body");
+  });
+  suite.testWithFixture("fixture skipped", (context: TestContext): string => {
+    const path = context.tempDir();
+    context.cleanup((): void => { fmt.Println("fixture-resource-cleanup"); });
+    skipTest("fixture unavailable");
+    return path;
+  }, (path: string, context: TestContext): void => {
+    fmt.Println("unreachable-fixture-body");
+  });
+  suite.testEachWithFixture([1, 2], (row: int): string => {
+    return fmt.Sprintf("row %d", row);
+  }, (row: int, context: TestContext): int => {
+    context.cleanup((): void => { fmt.Printf("row-cleanup:%d\n", row); });
+    if (row == 2) {
+      skipTest("row unavailable");
+    }
+    return row;
+  }, (row: int, value: int, context: TestContext): void => {
+    expectEqual(row, value);
+  });
+  suite.test("later case", (): void => {
+    expectEqual(os.Getenv("VASEST_RUNTIME_RESOURCE"), original);
+    fmt.Println("conditional-later-case");
+  });
+  suite.run();
+
+  const hook = new Suite("conditional hook");
+  hook.beforeEach((): void => { skipTest("hook unavailable"); });
+  hook.afterEach((): void => { fmt.Println("hook-afterEach"); });
+  hook.test("hook skipped", (): void => { fmt.Println("unreachable-hook-body"); });
+  hook.runAndExit();
+}

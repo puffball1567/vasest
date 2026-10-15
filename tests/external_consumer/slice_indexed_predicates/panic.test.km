@@ -1,0 +1,18 @@
+import { Suite, TestContext, expectSlice } from "vasest";
+import go fmt from "fmt";
+import go reflect from "reflect";
+
+function main(): void {
+  const suite = new Suite("slice indexed predicate native panic");
+  suite.afterEach((): void => { fmt.Println("slice-indexed-predicate-panic-afterEach"); });
+  suite.afterAll((): void => { fmt.Println("slice-indexed-predicate-panic-afterAll"); });
+  suite.testWithContext("native predicate panic", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("slice-indexed-predicate-panic-cleanup"); });
+    expectSlice<int>([42]).not.toSatisfyAllIndexed((value: int, index: int): boolean => {
+      reflect.ValueOf(value).Index(0);
+      return false;
+    });
+  });
+  suite.test("later case", (): void => { fmt.Println("unreachable-slice-indexed-predicate-panic-later"); });
+  suite.runAndExit();
+}

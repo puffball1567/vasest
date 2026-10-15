@@ -1,0 +1,8 @@
+import { MockFn, MockAction } from "vasest";
+type UserID = distinct int64;
+type OtherID = distinct int64;
+function main(): void {
+  const mock = new MockFn<UserID, int64>((value: UserID): int64 => { return int64(42); });
+  const action = new MockAction<UserID>((value: UserID): void => {});
+  mock.reset(42);
+}

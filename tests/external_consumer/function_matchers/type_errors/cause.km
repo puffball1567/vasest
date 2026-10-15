@@ -1,0 +1,2 @@
+import { expectFunction } from "vasest";
+function main(): void { expectFunction((): void => {}).toThrowCause("missing"); }

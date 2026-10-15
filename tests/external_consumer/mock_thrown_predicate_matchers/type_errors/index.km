@@ -1,0 +1,5 @@
+import { MockAction, MockOutcomeExpectation, expectMockOutcome } from "vasest";
+function main(): void {
+  const mock = new MockAction<int>((value: int): void => {});
+  expectMockOutcome(mock).toHaveNthThrownSatisfying("1", (value: error): boolean => { return true; });
+}

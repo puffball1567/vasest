@@ -1,0 +1,2 @@
+import { expectMap } from "vasest";
+function main(): void { expectMap<int[], int>(nil).toHaveLength(0); }

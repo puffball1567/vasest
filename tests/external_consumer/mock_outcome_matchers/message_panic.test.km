@@ -1,0 +1,30 @@
+import { Suite, TestContext, MockOutcomeResult, MockOutcomeSource, expectMockOutcome } from "vasest";
+import go fmt from "fmt";
+import go reflect from "reflect";
+
+class PanickingError implements error {
+  constructor() {}
+  public function Error(): string { reflect.ValueOf(42).Index(0); return ""; }
+}
+
+class ErrorSource implements MockOutcomeSource {
+  constructor() {}
+  public function outcomes(): MockOutcomeResult[] {
+    const outcome = MockOutcomeResult { status: "throw", exception: new PanickingError() };
+    return [outcome];
+  }
+}
+
+function main(): void {
+  const suite = new Suite("mock outcome error-message native panic");
+  suite.afterEach((): void => { fmt.Println("mock-outcome-error-afterEach"); });
+  suite.afterAll((): void => { fmt.Println("mock-outcome-error-afterAll"); });
+  suite.testWithContext("native error message panic", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("mock-outcome-error-cleanup"); });
+    const source = new ErrorSource();
+    expectMockOutcome(source).toHaveThrownTimes(1);
+    expectMockOutcome(source).not.toHaveLastThrownMessage("failed");
+  });
+  suite.test("later case", (): void => { fmt.Println("unreachable-mock-outcome-error-later"); });
+  suite.runAndExit();
+}

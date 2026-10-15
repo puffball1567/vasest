@@ -1,0 +1,2 @@
+import { expect } from "vasest";
+function main(): void { expect(42).toSatisfy((value: string): boolean => { return true; }); }

@@ -1,0 +1,2 @@
+import { expectMockOutcome } from "vasest";
+function main(): void { expectMockOutcome(nil).toHaveLastThrownTypeSatisfying<error>((value: error): int => { return 1; }); }

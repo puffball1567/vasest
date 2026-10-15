@@ -1,0 +1,18 @@
+import { Suite, TestContext } from "vasest";
+import go fmt from "fmt";
+import go reflect from "reflect";
+function main(): void {
+  const suite = new Suite("indexed fixture panic");
+  const rows: int[] = [42];
+  suite.afterEach((): void => { fmt.Println("indexed-fixture-panic-afterEach"); });
+  suite.afterAll((): void => { fmt.Println("indexed-fixture-panic-afterAll"); });
+  suite.testEachIndexedWithFixture<int, int>(rows, (value: int, index: int): string => { return fmt.Sprint(index); },
+    (value: int, index: int, context: TestContext): int => {
+      context.cleanup((): void => { fmt.Println("indexed-fixture-panic-cleanup"); });
+      reflect.ValueOf(index).Index(0); return index;
+    }, (value: int, index: int, fixture: int, context: TestContext): void => {
+      fmt.Println("unreachable-indexed-fixture-body");
+    });
+  suite.test("later", (): void => { fmt.Println("unreachable-indexed-fixture-later"); });
+  suite.runAndExit();
+}

@@ -1,0 +1,8 @@
+import { MapExpectation, expectMap } from "vasest";
+type UserID = distinct int64;
+type Score = distinct int64;
+function main(): void {
+  const values: Map<int64, int64> = makeMap[int64, int64]();
+  const nominal: Map<UserID, Score> = makeMap[UserID, Score]();
+  expectMap<UserID, Score>(nominal).toSatisfyAll((key: UserID, value: int64): boolean => { return true; });
+}

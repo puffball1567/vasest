@@ -1,0 +1,44 @@
+import { Suite, TestContext, expectSlice, withTestLocation } from "vasest";
+import go fmt from "fmt";
+import go math from "math";
+import go os from "os";
+
+class Node {
+  public value: int;
+  public next: Node;
+  constructor(value: int) { this.value = value; this.next = nil; }
+}
+
+function main(): void {
+  const suite = new Suite("slice sequence failures");
+  suite.afterEach((): void => { fmt.Println("slice-sequence-afterEach"); });
+  suite.afterAll((): void => { fmt.Println("slice-sequence-afterAll"); });
+  suite.testWithContext("missing sequence", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("slice-sequence-cleanup"); });
+    if (os.Getenv("VASEST_SLICE_SEQUENCE_FIXED") == "1") {
+      expectSlice<int>([1, 2, 3]).toContainSequence([2, 3]);
+      fmt.Println("slice-sequence-fixed");
+    } else {
+      expectSlice<int>([1, 2, 3]).toContainSequence([1, 3]);
+    }
+  });
+  suite.test("negated matching sequence", (): void => { expectSlice<int>([1, 2, 3]).not.toContainSequence([2, 3]); });
+  suite.test("missing overlapping sequence", (): void => { expectSlice<int>([1, 1, 2, 1, 1, 2]).toContainSequence([1, 1, 3]); });
+  suite.test("negated empty sequence", (): void => { expectSlice<int>([1]).not.toContainSequence([]); });
+  suite.test("NaN sequence", (): void => {
+    const values: float64[] = [math.NaN()];
+    expectSlice<float64>(values).toContainSequence(values);
+  });
+  suite.test("cyclic sequence", (): void => {
+    const first = new Node(42);
+    const second = new Node(43);
+    first.next = first;
+    second.next = second;
+    expectSlice<Node>([first]).toContainSequence([second]);
+  });
+  suite.test("explicit sequence location", (): void => {
+    withTestLocation("domain-check.km", 42, (): void => { expectSlice<int>([1, 2]).toContainSequence([2, 1]); });
+  });
+  suite.test("later case", (): void => { fmt.Println("slice-sequence-failing-later"); });
+  suite.runAndExit();
+}

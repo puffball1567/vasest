@@ -1,0 +1,5 @@
+import { MapExpectation, expectMap } from "vasest";
+type UserID = distinct int64;
+function main(): void {
+  const values: Map<string, int> = makeMap[string, int](); expectMap<string, int>(values).toHaveEntrySatisfying(42, (value: int): boolean => { return true; });
+}

@@ -1,0 +1,43 @@
+import { Suite, expect, expectThrowsMessage, expectNoError, withEnv } from "vasest";
+import go fmt from "fmt";
+import go os from "os";
+
+function main(): void {
+  const suite = new Suite("JSON field validation");
+  suite.afterEach((): void => { fmt.Println("json-fields-cleanup"); });
+  suite.test("completed", (): void => {
+    expect<int64>(1152921504606846977).toEqual(1152921504606846977);
+    fmt.Println("json-fields-completed");
+  });
+  suite.test("rejects overrides before selection hooks", (): void => {
+    let calls = 0;
+    const nested = new Suite("nested");
+    nested.beforeAll((): void => { calls++; });
+    nested.test("case", (): void => {
+      calls++;
+      fmt.Println("json-fields-selection-ran");
+    });
+    const selections: string[] = [
+      "{\"all\":false,\"All\":true,\"suites\":[]}",
+      "{\"all\":false,\"suites\":[{\"name\":\"other\",\"name\":\"nested\",\"cases\":[\"case\"]}]}",
+      "{\"all\":false,\"suites\":[{\"name\":\"nested\",\"cases\":[\"other\"],\"caſes\":[\"case\"]}]}"
+    ];
+    for (const selection of selections) {
+      withEnv("VASEST_RERUN_SELECTION", selection, (): void => {
+        expectThrowsMessage((): void => { nested.run(); }, "duplicate JSON field");
+      });
+      expect<int>(calls).toBe(0);
+    }
+  });
+  suite.run();
+  if (os.Getenv("VASEST_JSON_FIELDS_FIXED") == "1") {
+    return;
+  }
+  const key = os.Getenv("VASEST_JSON_FIELDS_KEY");
+  const data = "{\"success\":false,\"" + key + "\":true,\"summary\":{\"suite\":\"hidden report\",\"passed\":1,\"results\":[{\"name\":\"hidden case\",\"passed\":true,\"status\":\"pass\"}]}}\n";
+  const [report, openError] = os.OpenFile(os.Getenv("VASEST_REPORT_PATH"), os.O_APPEND | os.O_WRONLY, 0600);
+  expectNoError(openError);
+  const [written, writeError] = report.WriteString(data);
+  expectNoError(writeError);
+  expectNoError(report.Close());
+}

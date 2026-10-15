@@ -1,0 +1,134 @@
+import { Suite, TestContext, MockFn, MockAction, MockOutcomeResult, MockOutcomeSource, MockOutcomeExpectation, expectMockOutcome, expectFunction, expect, skipTest } from "vasest";
+import go fmt from "fmt";
+import go errors from "errors";
+
+class DomainError implements error {
+  public code: int;
+  constructor(code: int) { this.code = code; }
+  public function Error(): string { throw errors.New("Error must not be called by matcher"); }
+}
+
+class Spy implements MockOutcomeSource {
+  public reads: int;
+  public original: error;
+  constructor(original: error) { this.reads = 0; this.original = original; }
+  public function outcomes(): MockOutcomeResult[] {
+    this.reads++;
+    const returned = MockOutcomeResult { status: "return", exception: this.original };
+    const pending = MockOutcomeResult { status: "incomplete", exception: this.original };
+    const panicked = MockOutcomeResult { status: "panic", exception: this.original };
+    const thrown = MockOutcomeResult { status: "throw", exception: this.original };
+    return [returned, pending, panicked, thrown];
+  }
+}
+
+function main(): void {
+  const suite = new Suite("typed mock thrown predicate matchers");
+  suite.test("typed error callbacks preserve queued behavior and live history", (): void => {
+    const original = errors.New("金木犀");
+    let invocations = 0;
+    let predicates = 0;
+    const mock = new MockAction<int>((value: int): void => { invocations++; });
+    mock.implementOnce((value: int): void => { throw original; });
+    const matches: (value: error) => boolean = (value: error): boolean => { predicates++; return value == original; };
+    const matcher: MockOutcomeExpectation = expectMockOutcome(mock);
+    matcher.not.toHaveThrownSatisfying(matches);
+    matcher.not.toHaveNthThrownSatisfying(1, matches);
+    matcher.not.toHaveLastThrownSatisfying(matches);
+    expect(predicates).toEqual(0);
+    expectFunction((): void => { mock.invoke(1); }).toThrow();
+    matcher.toHaveThrownSatisfying(matches);
+    matcher.toHaveNthThrownSatisfying(1, matches);
+    matcher.toHaveLastThrownSatisfying(matches);
+    mock.invoke(2);
+    matcher.toHaveThrownSatisfying(matches);
+    matcher.not.toHaveNthThrownSatisfying(2, matches);
+    matcher.not.toHaveLastThrownSatisfying(matches);
+    expect(predicates).toEqual(4);
+    expect(invocations).toEqual(1);
+    mock.clearCalls();
+    matcher.not.toHaveThrownSatisfying(matches);
+    expect(predicates).toEqual(4);
+  });
+  suite.test("application exceptions retain references without reading messages", (): void => {
+    const original = new DomainError(42);
+    const expected: error = original;
+    const mock = new MockFn<int, int>((value: int): int => { throw original; });
+    expectFunction((): void => { mock.invoke(1); }).toThrow();
+    new MockOutcomeExpectation(mock).toHaveThrownSatisfying((value: error): boolean => { return value == expected; });
+    expectMockOutcome(mock).toHaveNthThrownSatisfying(1, (value: error): boolean => { original.code++; return value == expected; });
+    expect(original.code).toEqual(43);
+    expectMockOutcome(mock).toHaveLastThrownSatisfying((value: error): boolean => { return value == expected; });
+    expectMockOutcome(mock).not.toHaveNthThrownSatisfying(2, (value: error): boolean => { throw errors.New("missing call evaluated"); });
+  });
+  suite.test("nil throws and typed nil exceptions retain native identity", (): void => {
+    const mock = new MockAction<int>((value: int): void => { const missing: error = nil; throw missing; });
+    expectFunction((): void => { mock.invoke(1); }).toThrow();
+    expectMockOutcome(mock).toHaveThrownSatisfying((value: error): boolean => { return value == nil; });
+    const typedNil: DomainError = nil;
+    const expectedNil: error = typedNil;
+    mock.implementOnce((value: int): void => { throw typedNil; });
+    expectFunction((): void => { mock.invoke(2); }).toThrow();
+    expectMockOutcome(mock).toHaveLastThrownSatisfying((value: error): boolean => { return value != nil && value == expectedNil; });
+  });
+  suite.test("custom sources read one snapshot and exclude nonthrows", (): void => {
+    const original = errors.New("original");
+    const spy = new Spy(original);
+    const source: MockOutcomeSource = spy;
+    const matcher = new MockOutcomeExpectation(source);
+    let calls = 0;
+    const matches: (value: error) => boolean = (value: error): boolean => { calls++; return value == original; };
+    matcher.toHaveThrownSatisfying(matches);
+    matcher.toHaveNthThrownSatisfying(4, matches);
+    matcher.toHaveLastThrownSatisfying(matches);
+    matcher.not.toHaveThrownSatisfying((value: error): boolean => { calls++; return false; });
+    matcher.not.toHaveNthThrownSatisfying(1, matches);
+    matcher.not.toHaveLastThrownSatisfying((value: error): boolean => { calls++; return false; });
+    expect(spy.reads).toEqual(6);
+    expect(calls).toEqual(5);
+  });
+  suite.test("callbacks may clear and add throws while inspecting a snapshot", (): void => {
+    const original = errors.New("original");
+    const mock = new MockAction<int>((value: int): void => { throw original; });
+    expectFunction((): void => { mock.invoke(1); }).toThrow();
+    expectFunction((): void => { mock.invoke(2); }).toThrow();
+    let calls = 0;
+    expectMockOutcome(mock).not.toHaveThrownSatisfying((value: error): boolean => {
+      calls++;
+      mock.clearCalls();
+      expectFunction((): void => { mock.invoke(3); }).toThrow();
+      return false;
+    });
+    expect(calls).toEqual(2);
+    expect(mock.callCount()).toEqual(1);
+    expectMockOutcome(mock).toHaveLastThrownSatisfying((value: error): boolean => { return value == original; });
+  });
+  suite.test("normally returned errors are excluded from throw predicates", (): void => {
+    const original = errors.New("returned error");
+    const mock = new MockFn<int, error>((value: int): error => { return original; });
+    mock.invoke(1);
+    const unreachable: (value: error) => boolean = (value: error): boolean => { throw errors.New("return treated as throw"); };
+    expectMockOutcome(mock).not.toHaveThrownSatisfying(unreachable);
+    expectMockOutcome(mock).not.toHaveNthThrownSatisfying(1, unreachable);
+    expectMockOutcome(mock).not.toHaveLastThrownSatisfying(unreachable);
+  });
+  const mock = new MockAction<int>((value: int): void => { throw errors.New("original"); });
+  expectFunction((): void => { mock.invoke(42); }).toThrow();
+  suite.testWithContext("runtime skip through negated any", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("throw-predicate-skip-cleanup"); });
+    expectMockOutcome(mock).not.toHaveThrownSatisfying((value: error): boolean => { skipTest("throw predicate resource unavailable"); return false; });
+    fmt.Println("unreachable-throw-predicate-skip");
+  });
+  suite.testWithContext("runtime skip through positive nth", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("throw-predicate-skip-cleanup"); });
+    expectMockOutcome(mock).toHaveNthThrownSatisfying(1, (value: error): boolean => { skipTest("throw predicate resource unavailable"); return true; });
+    fmt.Println("unreachable-throw-predicate-skip");
+  });
+  suite.testWithContext("runtime skip through negated last", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("throw-predicate-skip-cleanup"); });
+    expectMockOutcome(mock).not.toHaveLastThrownSatisfying((value: error): boolean => { skipTest("throw predicate resource unavailable"); return false; });
+    fmt.Println("unreachable-throw-predicate-skip");
+  });
+  suite.test("later case", (): void => { fmt.Println("throw-predicate-passing-later"); });
+  suite.runAndExit();
+}

@@ -1,0 +1,11 @@
+import { Suite, FixtureSuite, TestContext } from "vasest";
+type UserID = distinct int64;
+type OtherID = distinct int64;
+function main(): void {
+  const suite = new Suite("type errors");
+  const rows: UserID[] = [UserID(42)];
+  const nameOf: (value: UserID, index: int) => string = (value: UserID, index: int): string => { return "row"; };
+  const body: (value: UserID, index: int) => void = (value: UserID, index: int): void => {};
+  const fixtureBody: (value: UserID, index: int, fixture: string, context: TestContext) => void = (value: UserID, index: int, fixture: string, context: TestContext): void => {};
+  suite.testEachIndexed<UserID>(rows, (value: UserID, index: int64): string => { return "row"; }, body);
+}

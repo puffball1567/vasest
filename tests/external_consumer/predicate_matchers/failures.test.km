@@ -1,0 +1,28 @@
+import { Suite, TestContext, expect, withTestLocation } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+
+function main(): void {
+  const suite = new Suite("predicate failures");
+  suite.afterEach((): void => { fmt.Println("predicate-afterEach"); });
+  suite.testWithContext("positive mismatch", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("predicate-cleanup"); });
+    expect(42).toSatisfy((value: int): boolean => { return value < 0; });
+  });
+  suite.test("negated mismatch", (): void => {
+    expect(42).not.toSatisfy((value: int): boolean => { return value > 0; });
+  });
+  suite.test("nil predicate", (): void => { expect(42).toSatisfy(nil); });
+  suite.test("negated nil predicate", (): void => { expect(42).not.toSatisfy(nil); });
+  suite.test("thrown predicate", (): void => {
+    expect(42).not.toSatisfy((value: int): boolean => { throw errors.New("predicate callback failed"); });
+  });
+  suite.test("explicit callback location", (): void => {
+    expect(42).toSatisfy((value: int): boolean => {
+      withTestLocation("domain-check.km", 42, (): void => { throw errors.New("domain predicate failed"); });
+      return true;
+    });
+  });
+  suite.test("later case", (): void => { fmt.Println("predicate-failing-later"); });
+  suite.runAndExit();
+}

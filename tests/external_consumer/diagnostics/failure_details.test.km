@@ -1,0 +1,46 @@
+import { Suite, TestContext, TestFailure, expectEqual, fail } from "vasest";
+import go errors from "errors";
+
+function checkDetail(failure: TestFailure, phase: string, message: string): void {
+  expectEqual(failure.phase, phase);
+  expectEqual(failure.message, message);
+}
+
+function main(): void {
+  const blocked = new Suite("blocked diagnostics");
+  blocked.beforeAll((): void => { throw errors.New(""); });
+  blocked.afterAll((): void => { throw errors.New("shared cleanup"); });
+  blocked.test("blocked body", (): void => { fail("body must not run"); });
+  const blockedResult = blocked.run();
+  checkDetail(blockedResult.results[0].failures[0], "beforeAll", "");
+  checkDetail(blockedResult.results[2].failures[0], "afterAll", "shared cleanup");
+
+  const suite = new Suite("failure diagnostics");
+  let row = 0;
+  suite.beforeEach((): void => {
+    row++;
+    if (row == 1) {
+      throw errors.New("setup <&> failed");
+    }
+  });
+  suite.afterEach((): void => {
+    if (row == 2) {
+      throw errors.New("afterEach: text; cleanup: still one error\n金木犀");
+    }
+  });
+  suite.test("setup failure", (): void => { fail("body must not run"); });
+  suite.testWithContext("multiple failures", (context: TestContext): void => {
+    context.cleanup((): void => { throw errors.New("first cleanup"); });
+    context.cleanup((): void => { throw errors.New(""); });
+    throw errors.New("");
+  });
+  suite.test("later case passes", (): void => {});
+  const result = suite.run();
+  checkDetail(result.results[0].failures[0], "beforeEach", "setup <&> failed");
+  expectEqual(len(result.results[1].failures), 4);
+  checkDetail(result.results[1].failures[0], "body", "");
+  checkDetail(result.results[1].failures[1], "afterEach", "afterEach: text; cleanup: still one error\n金木犀");
+  checkDetail(result.results[1].failures[2], "cleanup", "");
+  checkDetail(result.results[1].failures[3], "cleanup", "first cleanup");
+  expectEqual(len(result.results[2].failures), 0);
+}

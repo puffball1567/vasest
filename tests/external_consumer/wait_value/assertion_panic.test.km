@@ -1,0 +1,15 @@
+import { Suite, TestContext, waitForValue, waitFor } from "vasest";
+import go fmt from "fmt";
+import go reflect from "reflect";
+import go time from "time";
+function main(): void {
+  const suite = new Suite("wait native panic");
+  suite.afterEach((): void => { fmt.Println("wait-assertion-panic-afterEach"); });
+  suite.afterAll((): void => { fmt.Println("wait-assertion-panic-afterAll"); });
+  suite.testWithContext("native panic", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("wait-assertion-panic-cleanup"); });
+    waitFor((): void => { reflect.ValueOf(42).Index(0); }, time.Second, time.Millisecond);
+  });
+  suite.test("later case", (): void => { fmt.Println("unreachable-wait-assertion-panic-later"); });
+  suite.runAndExit();
+}

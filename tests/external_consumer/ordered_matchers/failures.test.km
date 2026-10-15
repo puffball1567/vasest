@@ -1,0 +1,20 @@
+import { Suite, TestContext, expectOrdered } from "vasest";
+import go fmt from "fmt";
+
+function main(): void {
+  const suite = new Suite("ordered failures");
+  suite.afterEach((): void => { fmt.Println("ordered-afterEach"); });
+  suite.testWithContext("greater than", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("ordered-cleanup"); });
+    expectOrdered(42).toBeGreaterThan(42);
+  });
+  suite.test("greater than or equal", (): void => { expectOrdered(42).toBeGreaterThanOrEqual(43); });
+  suite.test("less than", (): void => { expectOrdered(42).toBeLessThan(42); });
+  suite.test("less than or equal", (): void => { expectOrdered(42).toBeLessThanOrEqual(41); });
+  suite.test("negated greater than", (): void => { expectOrdered(42).not.toBeGreaterThan(41); });
+  suite.test("negated greater than or equal", (): void => { expectOrdered(42).not.toBeGreaterThanOrEqual(42); });
+  suite.test("negated less than", (): void => { expectOrdered(42).not.toBeLessThan(43); });
+  suite.test("negated less than or equal", (): void => { expectOrdered(42).not.toBeLessThanOrEqual(42); });
+  suite.test("later case", (): void => { fmt.Println("ordered-later-case"); });
+  suite.runAndExit();
+}

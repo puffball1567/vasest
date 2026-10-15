@@ -1,0 +1,15 @@
+import { Suite, TestContext, expectSlice } from "vasest";
+import go fmt from "fmt";
+import go reflect from "reflect";
+
+function main():void {
+  const suite=new Suite("selected element native panic");
+  suite.afterEach(():void=>{fmt.Println("slice-element-panic-afterEach");});
+  suite.afterAll(():void=>{fmt.Println("slice-element-panic-afterAll");});
+  suite.testWithContext("native predicate panic",(context:TestContext):void=>{
+    context.cleanup(():void=>{fmt.Println("slice-element-panic-cleanup");});
+    expectSlice<int>([42]).not.toHaveElementSatisfying(0,(value:int):boolean=>{reflect.ValueOf(value).Index(0);return false;});
+  });
+  suite.test("later case",():void=>{fmt.Println("unreachable-slice-element-panic-later");});
+  suite.runAndExit();
+}

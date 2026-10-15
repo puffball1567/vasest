@@ -1,0 +1,41 @@
+import { Suite, TestContext, MockAction, MockCallSource, expectMock, withTestLocation } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+
+function main(): void {
+  const suite = new Suite("mock predicate failures");
+  const action = new MockAction<int>((value: int): void => {});
+  action.invoke(42);
+  const empty = new MockAction<int>((value: int): void => {});
+  suite.afterEach((): void => { fmt.Println("mock-predicate-afterEach"); });
+  suite.testWithContext("any mismatch", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("mock-predicate-cleanup"); });
+    expectMock<int>(action).toHaveBeenCalledSatisfying((value: int): boolean => { return value < 0; });
+  });
+  suite.test("nth mismatch", (): void => { expectMock(action).toHaveBeenNthCalledSatisfying(1, (value: int): boolean => { return value < 0; }); });
+  suite.test("last mismatch", (): void => { expectMock(action).toHaveBeenLastCalledSatisfying((value: int): boolean => { return value < 0; }); });
+  suite.test("negated any mismatch", (): void => { expectMock(action).not.toHaveBeenCalledSatisfying((value: int): boolean => { return value > 0; }); });
+  suite.test("negated nth mismatch", (): void => { expectMock(action).not.toHaveBeenNthCalledSatisfying(1, (value: int): boolean => { return value > 0; }); });
+  suite.test("negated last mismatch", (): void => { expectMock(action).not.toHaveBeenLastCalledSatisfying((value: int): boolean => { return value > 0; }); });
+  suite.test("nil any predicate", (): void => { expectMock(action).toHaveBeenCalledSatisfying(nil); });
+  suite.test("nil nth predicate", (): void => { expectMock(action).toHaveBeenNthCalledSatisfying(1, nil); });
+  suite.test("nil last predicate", (): void => { expectMock(action).toHaveBeenLastCalledSatisfying(nil); });
+  suite.test("negated nil any predicate", (): void => { expectMock(action).not.toHaveBeenCalledSatisfying(nil); });
+  suite.test("negated nil nth predicate", (): void => { expectMock(action).not.toHaveBeenNthCalledSatisfying(1, nil); });
+  suite.test("negated nil last predicate", (): void => { expectMock(action).not.toHaveBeenLastCalledSatisfying(nil); });
+  suite.test("invalid index", (): void => { expectMock(action).toHaveBeenNthCalledSatisfying(0, (value: int): boolean => { return true; }); });
+  suite.test("negated invalid index", (): void => { expectMock(action).not.toHaveBeenNthCalledSatisfying(-1, (value: int): boolean => { return true; }); });
+  suite.test("missing nth", (): void => { expectMock(action).toHaveBeenNthCalledSatisfying(2, (value: int): boolean => { return true; }); });
+  suite.test("missing last", (): void => { expectMock(empty).toHaveBeenLastCalledSatisfying((value: int): boolean => { return true; }); });
+  suite.test("nil source", (): void => { const source: MockCallSource<int> = nil; expectMock<int>(source).toHaveBeenCalledSatisfying((value: int): boolean => { return true; }); });
+  suite.test("typed nil source", (): void => { const source: MockAction<int> = nil; expectMock<int>(source).not.toHaveBeenLastCalledSatisfying((value: int): boolean => { return false; }); });
+  suite.test("thrown predicate", (): void => { expectMock(action).not.toHaveBeenCalledSatisfying((value: int): boolean => { throw errors.New("predicate callback failed"); }); });
+  suite.test("explicit callback location", (): void => {
+    expectMock(action).toHaveBeenNthCalledSatisfying(1, (value: int): boolean => {
+      withTestLocation("domain-check.km", 42, (): void => { throw errors.New("domain predicate failed"); });
+      return true;
+    });
+  });
+  suite.test("later case", (): void => { fmt.Println("mock-predicate-failing-later"); });
+  suite.runAndExit();
+}

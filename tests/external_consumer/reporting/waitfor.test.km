@@ -1,0 +1,20 @@
+import { Suite, expectEqual, fail, runSuiteAndExit, waitFor } from "vasest";
+import go time from "time";
+
+function main(): void {
+  runSuiteAndExit("waitFor cases", (suite: Suite): void => {
+    suite.test("retries an assertion", (): void => {
+      let attempts = 0;
+      waitFor((): void => {
+        attempts++;
+        expectEqual(attempts, 3);
+      }, 100 * time.Millisecond, time.Millisecond);
+      expectEqual(attempts, 3);
+    });
+    suite.test("times out with the last failure", (): void => {
+      waitFor((): void => {
+        fail("still pending");
+      }, 5 * time.Millisecond, time.Millisecond);
+    });
+  });
+}

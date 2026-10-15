@@ -1,0 +1,9 @@
+import { Suite, expectEqual, runSuiteAndExit } from "vasest";
+
+function main(): void {
+  runSuiteAndExit("text comparison", (suite: Suite): void => {
+    suite.test("reports changed line", (): void => {
+      expectEqual("first\n銀木犀\nlast", "first\n金木犀\nlast");
+    });
+  });
+}

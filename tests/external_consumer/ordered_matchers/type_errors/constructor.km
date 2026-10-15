@@ -1,0 +1,2 @@
+import { OrderedExpectation } from "vasest";
+function main(): void { const matcher = new OrderedExpectation<boolean>(true); }

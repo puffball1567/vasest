@@ -1,0 +1,22 @@
+import { FixtureSuite, TestContext } from "vasest";
+import go fmt from "fmt";
+import go reflect from "reflect";
+
+function main(): void {
+  const suite = new FixtureSuite<string>("shared context hook after panic", (context: TestContext): string => {
+    context.cleanup((): void => { fmt.Println("context-after-panic-sharedCleanup"); });
+    return "shared";
+  });
+  suite.beforeEachWithContext((fixture: string, context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("context-after-panic-cleanup"); });
+  });
+  suite.afterEachWithContext((fixture: string, context: TestContext): void => {
+    fmt.Println("context-after-panic-afterEach");
+    context.cleanup((): void => { fmt.Println("context-after-panic-afterCleanup"); });
+    reflect.ValueOf(42).Index(0);
+  });
+  suite.afterAll((fixture: string): void => { fmt.Println("context-after-panic-afterAll"); });
+  suite.test("native panic", (fixture: string, context: TestContext): void => {});
+  suite.test("later", (fixture: string, context: TestContext): void => { fmt.Println("unreachable-after-panic-later"); });
+  suite.runAndExit();
+}

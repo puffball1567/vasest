@@ -1,0 +1,2 @@
+import { MockOutcomeExpectation } from "vasest";
+function main(): void { new MockOutcomeExpectation(42).toHaveReturned(); }

@@ -1,0 +1,87 @@
+import { Suite, MockFn, MockAction, expect, expectMock, expectMockReturn, expectMockOutcome, expectFunction } from "vasest";
+import go fmt from "fmt";
+import go errors from "errors";
+
+type UserID = distinct int64;
+
+class Record {
+  public value: int;
+  constructor(value: int) { this.value = value; }
+}
+
+function main(): void {
+  const suite = new Suite("typed mock reset");
+  suite.test("function reset replaces default queue and histories", (): void => {
+    const original = new Record(1);
+    const fresh = new Record(2);
+    const mock = new MockFn<UserID, Record>((value: UserID): Record => { return original; });
+    mock.invoke(UserID(42));
+    mock.returnValueOnce(original);
+    mock.implementOnce((value: UserID): Record => { fmt.Println("unreachable-reset-queue"); return original; });
+    const oldCalls = mock.calls();
+    const oldResults = mock.results();
+    const calls = expectMock<UserID>(mock);
+    const returns = expectMockReturn<Record>(mock);
+    const outcomes = expectMockOutcome(mock);
+    const replacement: (value: UserID) => Record = (value: UserID): Record => { expect(value).toEqual(UserID(1152921504606846977)); return fresh; };
+    mock.reset(replacement);
+    calls.not.toHaveBeenCalled(); returns.not.toHaveReturned(); outcomes.not.toHaveThrown();
+    expect(len(mock.results())).toEqual(0);
+    expect(len(mock.outcomes())).toEqual(0);
+    expect(mock.invoke(UserID(1152921504606846977))).toBe(fresh);
+    calls.toHaveBeenCalledWith(UserID(1152921504606846977)); returns.toHaveReturnedWith(fresh);
+    expect(oldCalls[0]).toEqual(UserID(42)); expect(oldResults[0].value).toBe(original);
+    mock.returnValueOnce(nil);
+    mock.clearCalls();
+    expect(mock.invoke(UserID(1152921504606846977))).toBeNil();
+    expect(mock.invoke(UserID(1152921504606846977))).toBe(fresh);
+  });
+  suite.test("nil reset preserves behavior and history", (): void => {
+    const mock = new MockFn<int, int>((value: int): int => { return value + 1; });
+    mock.invoke(1); mock.returnValueOnce(42);
+    expectFunction((): void => { mock.reset(nil); }).toThrowMessage("must not be nil");
+    expect(mock.callCount()).toEqual(1);
+    expect(mock.invoke(2)).toEqual(42); expect(mock.invoke(3)).toEqual(4);
+    let total = 0;
+    const action = new MockAction<int>((value: int): void => { total += value; });
+    action.invoke(1);
+    action.implementOnce((value: int): void => { total += value * 10; });
+    expectFunction((): void => { action.reset(nil); }).toThrowMessage("must not be nil");
+    expect(action.callCount()).toEqual(1); action.invoke(2); action.invoke(3); expect(total).toEqual(24);
+  });
+  suite.test("reset inside function discards active outer result", (): void => {
+    const mock = new MockFn<int, int>((value: int): int => { return 0; });
+    mock.implement((value: int): int => {
+      mock.reset((value: int): int => { return value * 2; });
+      return mock.invoke(value + 1) + 1;
+    });
+    expect(mock.invoke(10)).toEqual(23);
+    expectMock<int>(mock).toHaveBeenCalledTimes(1);
+    expectMock<int>(mock).toHaveBeenCalledWith(11);
+    expectMockReturn<int>(mock).toHaveReturnedWith(22);
+    expectMockReturn<int>(mock).not.toHaveReturnedWith(23);
+  });
+  suite.test("action reset discards queues and retains native argument", (): void => {
+    let received = UserID(0);
+    const action = new MockAction<UserID>((value: UserID): void => { fmt.Println("unreachable-reset-action-default"); });
+    action.implementOnce((value: UserID): void => { fmt.Println("unreachable-reset-action-queue"); });
+    action.reset((value: UserID): void => { received = value; });
+    action.invoke(UserID(1152921504606846977));
+    expect(received).toEqual(UserID(1152921504606846977));
+    expectMock<UserID>(action).toHaveBeenCalledTimes(1);
+    expectMockOutcome(action).toHaveReturnedTimes(1);
+  });
+  suite.test("returned errors and nil remain ordinary results", (): void => {
+    const cause = errors.New("returned native error");
+    const mock = new MockFn<int, error>((value: int): error => { return nil; });
+    mock.reset((value: int): error => { return cause; });
+    const returned = mock.invoke(42);
+    expect<error>(returned).toBe(cause);
+    expectMockReturn<error>(mock).toHaveReturnedWith(cause);
+    expectMockOutcome(mock).not.toHaveThrown();
+    mock.reset((value: int): error => { return nil; });
+    expect<error>(mock.invoke(42)).toBeNil();
+  });
+  suite.test("later case", (): void => { fmt.Println("mock-reset-passing-later"); });
+  suite.runAndExit();
+}

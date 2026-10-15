@@ -1,0 +1,69 @@
+import { Suite, TestContext, ErrorExpectation, NegatedErrorExpectation, expectErrorValue, expect, expectFunction, skipTest } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+import go os from "os";
+
+type ErrorCode = distinct int64;
+class DomainError implements error {
+  public code: ErrorCode;
+  public reads: int;
+  constructor(code: ErrorCode) { this.code = code; this.reads = 0; }
+  public function Error(): string { this.reads++; throw errors.New("unexpected Error call"); }
+  public function String(): string { return "domain"; }
+}
+
+function main(): void {
+  const suite = new Suite("typed error predicates");
+  suite.test("explicit types inferred bindings and constructors", (): void => {
+    const original = new DomainError(ErrorCode(1152921504606846977));
+    let calls = 0;
+    const predicate: (value: DomainError) => boolean = (value: DomainError): boolean => {
+      calls++; return value == original && value.code == ErrorCode(1152921504606846977);
+    };
+    const matcher: ErrorExpectation = expectErrorValue(original);
+    matcher.toMatchTypeSatisfying<DomainError>(predicate);
+    matcher.toMatchTypeSatisfying(predicate);
+    new ErrorExpectation(original).toMatchTypeSatisfying<DomainError>(predicate);
+    new NegatedErrorExpectation(original).toMatchTypeSatisfying<DomainError>((value: DomainError): boolean => { calls++; return false; });
+    expect(calls).toEqual(4); expect(original.reads).toEqual(0);
+  });
+  suite.test("references saved matchers and mismatch diagnostics", (): void => {
+    const original = new DomainError(ErrorCode(1));
+    const matcher = expectErrorValue(original);
+    matcher.toMatchTypeSatisfying<DomainError>((value: DomainError): boolean => { value.code = ErrorCode(1152921504606846978); return true; });
+    matcher.toMatchTypeSatisfying<DomainError>((value: DomainError): boolean => { return value.code == ErrorCode(1152921504606846978); });
+    expectFunction((): void => { matcher.toMatchTypeSatisfying<DomainError>((value: DomainError): boolean => { return false; }); }).toThrowMessage("satisfying predicate");
+    expectFunction((): void => { matcher.not.toMatchTypeSatisfying<DomainError>((value: DomainError): boolean => { return true; }); }).toThrowMessage("not to contain");
+    expect(original.reads).toEqual(0);
+  });
+  suite.test("native wrappers joins interfaces and first matching value", (): void => {
+    const original = new DomainError(ErrorCode(42));
+    const wrapped = fmt.Errorf("outer: %w", errors.Join(errors.New("other"), original));
+    expectErrorValue(wrapped).toMatchTypeSatisfying<DomainError>((value: DomainError): boolean => { return value == original; });
+    expectErrorValue(wrapped).toMatchTypeSatisfying<fmt.Stringer>((value: fmt.Stringer): boolean => { return value.String() == "domain"; });
+    const first = new DomainError(ErrorCode(1));
+    expectErrorValue(errors.Join(first, original)).not.toMatchTypeSatisfying<DomainError>((value: DomainError): boolean => { return value == original; });
+    const path = os.PathError { Op: "open", Path: "missing", Err: os.ErrNotExist };
+    expectErrorValue(fmt.Errorf("load: %w", &path)).toMatchTypeSatisfying<*os.PathError>((value: *os.PathError): boolean => { return value == &path && value.Path == "missing"; });
+  });
+  suite.test("missing type skips callbacks and typed nil matches", (): void => {
+    const unexpected: (value: DomainError) => boolean = (value: DomainError): boolean => { fmt.Println("unreachable-missing-type-predicate"); return true; };
+    expectErrorValue(nil).not.toMatchTypeSatisfying<DomainError>(unexpected);
+    expectErrorValue(errors.New("other")).not.toMatchTypeSatisfying<DomainError>(unexpected);
+    const missing: DomainError = nil;
+    expectErrorValue(missing).toMatchTypeSatisfying<DomainError>((value: DomainError): boolean => { return value == nil; });
+    expectErrorValue(missing).not.toMatchTypeSatisfying<DomainError>((value: DomainError): boolean => { return value != nil; });
+  });
+  suite.testWithContext("positive predicate skip", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("error-type-predicate-skip-cleanup"); });
+    expectErrorValue(errors.New("body")).toMatchTypeSatisfying<error>((value: error): boolean => { skipTest("predicate unavailable"); return false; });
+    fmt.Println("unreachable-positive-skip");
+  });
+  suite.testWithContext("negative predicate skip", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("error-type-predicate-skip-cleanup"); });
+    expectErrorValue(errors.New("body")).not.toMatchTypeSatisfying<error>((value: error): boolean => { skipTest("predicate unavailable"); return true; });
+    fmt.Println("unreachable-negative-skip");
+  });
+  suite.test("later case", (): void => { fmt.Println("error-type-predicate-passing-later"); });
+  suite.runAndExit();
+}

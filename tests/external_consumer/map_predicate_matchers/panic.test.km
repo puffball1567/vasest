@@ -1,0 +1,20 @@
+import { Suite, TestContext, expectMap } from "vasest";
+import go fmt from "fmt";
+import go reflect from "reflect";
+
+function main(): void {
+  const suite = new Suite("map predicate native panic");
+  suite.afterEach((): void => { fmt.Println("map-predicate-panic-afterEach"); });
+  suite.afterAll((): void => { fmt.Println("map-predicate-panic-afterAll"); });
+  suite.testWithContext("native predicate panic", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("map-predicate-panic-cleanup"); });
+    const values: Map<string, int> = makeMap[string, int]();
+    values["value"] = 42;
+    expectMap<string, int>(values).not.toHaveEntrySatisfying("value", (value: int): boolean => {
+      reflect.ValueOf(value).Index(0);
+      return false;
+    });
+  });
+  suite.test("later case", (): void => { fmt.Println("unreachable-map-predicate-panic-later"); });
+  suite.runAndExit();
+}

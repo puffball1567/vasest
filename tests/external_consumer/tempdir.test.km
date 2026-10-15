@@ -1,0 +1,51 @@
+import { Suite, expectEqual, expectFalse, expectNoError, expectThrowsMessage, expectTrue, runSuiteAndExit, withEnv, withTempDir } from "vasest";
+import go errors from "errors";
+import go os from "os";
+
+function main(): void {
+  runSuiteAndExit("temporary directory fixture", (suite: Suite): void => {
+    suite.test("cleans up after success", (): void => {
+      let savedPath = "";
+      withTempDir((path: string): void => {
+        savedPath = path;
+        const [info, statError] = os.Stat(path);
+        expectNoError(statError);
+        expectTrue(info.IsDir());
+      });
+      const [info, statError] = os.Stat(savedPath);
+      expectTrue(os.IsNotExist(statError));
+    });
+    suite.test("cleans up after thrown error", (): void => {
+      let savedPath = "";
+      expectThrowsMessage((): void => {
+        withTempDir((path: string): void => {
+          savedPath = path;
+          throw errors.New("fixture failure");
+        });
+      }, "fixture failure");
+      const [info, statError] = os.Stat(savedPath);
+      expectTrue(os.IsNotExist(statError));
+    });
+    suite.test("restores environment after nested scopes", (): void => {
+      expectNoError(os.Unsetenv("VASEST_FIXTURE_NESTED"));
+      withEnv("VASEST_FIXTURE_NESTED", "outer", (): void => {
+        withEnv("VASEST_FIXTURE_NESTED", "inner", (): void => {
+          expectEqual(os.Getenv("VASEST_FIXTURE_NESTED"), "inner");
+        });
+        expectEqual(os.Getenv("VASEST_FIXTURE_NESTED"), "outer");
+      });
+      const [value, found] = os.LookupEnv("VASEST_FIXTURE_NESTED");
+      expectFalse(found);
+    });
+    suite.test("restores environment after thrown error", (): void => {
+      withEnv("VASEST_FIXTURE_THROW", "original", (): void => {
+        expectThrowsMessage((): void => {
+          withEnv("VASEST_FIXTURE_THROW", "temporary", (): void => {
+            throw errors.New("fixture failure");
+          });
+        }, "fixture failure");
+        expectEqual(os.Getenv("VASEST_FIXTURE_THROW"), "original");
+      });
+    });
+  });
+}

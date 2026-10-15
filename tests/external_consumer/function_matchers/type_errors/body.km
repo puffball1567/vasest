@@ -1,0 +1,3 @@
+import { expectFunction } from "vasest";
+function returnsValue(): int { return 42; }
+function main(): void { expectFunction(returnsValue).toThrow(); }

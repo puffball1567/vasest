@@ -1,0 +1,5 @@
+import { MockFn, MockReturnExpectation, expectMockReturn } from "vasest";
+type UserID = distinct int64;
+function main(): void {
+  const mock = new MockFn<int, int64>((value: int): int64 => { return int64(value); }); expectMockReturn<int64>(mock).not.toHaveReturnedSatisfying((value: int32): boolean => { return true; });
+}

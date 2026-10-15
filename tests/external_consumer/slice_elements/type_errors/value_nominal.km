@@ -1,0 +1,7 @@
+import { expectSlice } from "vasest";
+type UserID=distinct int64;
+type OtherID=distinct int64;
+function main():void {
+ const values:UserID[]=[UserID(42)];
+ expectSlice<UserID>(values).toHaveElement(0,OtherID(42));
+}

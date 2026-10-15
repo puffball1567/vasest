@@ -1,0 +1,8 @@
+import { Suite, FixtureSuite, TestContext } from "vasest";
+type UserID = distinct int64;
+type OtherID = distinct int64;
+function main(): void {
+  const suite = new Suite("invalid hooks");
+  const shared = new FixtureSuite<UserID>("invalid typed hooks", (context: TestContext): UserID => { return UserID(42); });
+  shared.beforeEachWithContext((fixture: UserID, context: TestContext): boolean => { return true; });
+}

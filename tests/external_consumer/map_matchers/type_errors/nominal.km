@@ -1,0 +1,7 @@
+import { expectMap } from "vasest";
+type UserID = distinct int;
+type OrderID = distinct int;
+function main(): void {
+  const values: Map<UserID, int> = makeMap[UserID, int]();
+  expectMap<UserID, int>(values).toHaveKey(OrderID(1));
+}

@@ -1,0 +1,7 @@
+import { Suite, expect } from "vasest";
+
+function main(): void {
+  const suite = new Suite("nested regular discovery");
+  suite.test("passing nested case", (): void => { expect<boolean>(true).toEqual(true); });
+  suite.runAndExit();
+}

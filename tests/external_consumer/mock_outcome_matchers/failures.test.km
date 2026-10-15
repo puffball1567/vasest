@@ -1,0 +1,42 @@
+import { Suite, TestContext, MockAction, MockOutcomeSource, expectMockOutcome, expectFunction } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+
+function main(): void {
+  const suite = new Suite("mock outcome failures");
+  const empty = new MockAction<int>((value: int): void => {});
+  const returned = new MockAction<int>((value: int): void => {});
+  returned.invoke(42);
+  const thrown = new MockAction<int>((value: int): void => { throw errors.New("delivery failed"); });
+  expectFunction((): void => { thrown.invoke(42); }).toThrow();
+  suite.afterEach((): void => { fmt.Println("mock-outcome-afterEach"); });
+  suite.testWithContext("returned", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("mock-outcome-cleanup"); });
+    expectMockOutcome(empty).toHaveReturned();
+  });
+  suite.test("return count", (): void => { expectMockOutcome(returned).toHaveReturnedTimes(2); });
+  suite.test("thrown", (): void => { expectMockOutcome(empty).toHaveThrown(); });
+  suite.test("throw count", (): void => { expectMockOutcome(thrown).toHaveThrownTimes(2); });
+  suite.test("nth message", (): void => { expectMockOutcome(thrown).toHaveNthThrownMessage(1, "missing"); });
+  suite.test("last message", (): void => { expectMockOutcome(thrown).toHaveLastThrownMessage("missing"); });
+  suite.test("negated returned", (): void => { expectMockOutcome(returned).not.toHaveReturned(); });
+  suite.test("negated return count", (): void => { expectMockOutcome(returned).not.toHaveReturnedTimes(1); });
+  suite.test("negated thrown", (): void => { expectMockOutcome(thrown).not.toHaveThrown(); });
+  suite.test("negated throw count", (): void => { expectMockOutcome(thrown).not.toHaveThrownTimes(1); });
+  suite.test("negated nth message", (): void => { expectMockOutcome(thrown).not.toHaveNthThrownMessage(1, "failed"); });
+  suite.test("negated last message", (): void => { expectMockOutcome(thrown).not.toHaveLastThrownMessage("failed"); });
+  suite.test("invalid return count", (): void => { expectMockOutcome(empty).toHaveReturnedTimes(-1); });
+  suite.test("negated invalid return count", (): void => { expectMockOutcome(empty).not.toHaveReturnedTimes(-1); });
+  suite.test("invalid throw count", (): void => { expectMockOutcome(empty).toHaveThrownTimes(-1); });
+  suite.test("negated invalid throw count", (): void => { expectMockOutcome(empty).not.toHaveThrownTimes(-1); });
+  suite.test("invalid index", (): void => { expectMockOutcome(empty).toHaveNthThrownMessage(0, "failed"); });
+  suite.test("negated invalid index", (): void => { expectMockOutcome(empty).not.toHaveNthThrownMessage(0, "failed"); });
+  suite.test("empty nth message", (): void => { expectMockOutcome(empty).toHaveNthThrownMessage(1, ""); });
+  suite.test("negated empty nth message", (): void => { expectMockOutcome(empty).not.toHaveNthThrownMessage(1, ""); });
+  suite.test("empty last message", (): void => { expectMockOutcome(empty).toHaveLastThrownMessage(""); });
+  suite.test("negated empty last message", (): void => { expectMockOutcome(empty).not.toHaveLastThrownMessage(""); });
+  suite.test("nil source", (): void => { const source: MockOutcomeSource = nil; expectMockOutcome(source).toHaveThrown(); });
+  suite.test("typed nil source", (): void => { const source: MockAction<int> = nil; expectMockOutcome(source).not.toHaveReturned(); });
+  suite.test("later case", (): void => { fmt.Println("mock-outcome-later"); });
+  suite.runAndExit();
+}

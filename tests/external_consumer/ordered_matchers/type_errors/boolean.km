@@ -1,0 +1,2 @@
+import { expectOrdered } from "vasest";
+function main(): void { expectOrdered<boolean>(true); }

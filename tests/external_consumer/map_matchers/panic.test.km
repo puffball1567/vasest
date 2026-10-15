@@ -1,0 +1,16 @@
+import { Suite, TestContext, expectMap } from "vasest";
+import go fmt from "fmt";
+import go net from "net";
+
+function main(): void {
+  const suite = new Suite("native map key panic");
+  suite.afterEach((): void => { fmt.Println("map-panic-afterEach"); });
+  suite.afterAll((): void => { fmt.Println("map-panic-afterAll"); });
+  suite.testWithContext("unhashable interface key", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("map-panic-cleanup"); });
+    const values: Map<fmt.Stringer, int> = makeMap[fmt.Stringer, int]();
+    expectMap<fmt.Stringer, int>(values).not.toHaveKey(net.ParseIP("127.0.0.1"));
+  });
+  suite.test("later case", (): void => { fmt.Println("unreachable-map-panic-later"); });
+  suite.runAndExit();
+}

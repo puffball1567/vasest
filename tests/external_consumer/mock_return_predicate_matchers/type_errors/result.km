@@ -1,0 +1,5 @@
+import { MockFn, MockReturnExpectation, expectMockReturn } from "vasest";
+type UserID = distinct int64;
+function main(): void {
+  const mock = new MockFn<int, int>((value: int): int => { return value; }); expectMockReturn<int>(mock).toHaveNthReturnedSatisfying(1, (value: int): int => { return value; });
+}

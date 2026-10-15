@@ -1,0 +1,67 @@
+import { Suite, OrderedExpectation, expectOrdered } from "vasest";
+import go math from "math";
+import go time from "time";
+
+type UserID = distinct int64;
+type Label = distinct string;
+
+function main(): void {
+  const suite = new Suite("typed ordered matchers");
+  suite.test("explicit nominal types and integer precision", (): void => {
+    const id = UserID(1152921504606846977);
+    const matcher: OrderedExpectation<UserID> = expectOrdered<UserID>(id);
+    matcher.toBeGreaterThan(UserID(1152921504606846976));
+    matcher.toBeGreaterThanOrEqual(id);
+    matcher.toBeLessThan(UserID(1152921504606846978));
+    matcher.toBeLessThanOrEqual(id);
+    matcher.not.toBeGreaterThan(id);
+    matcher.not.toBeGreaterThanOrEqual(UserID(1152921504606846978));
+    matcher.not.toBeLessThan(id);
+    matcher.not.toBeLessThanOrEqual(UserID(1152921504606846976));
+    new OrderedExpectation<UserID>(id).toBeGreaterThan(UserID(1152921504606846976));
+    expectOrdered(id).toBeLessThan(UserID(1152921504606846978));
+    matcher.toBeGreaterThanOrEqual(id);
+  });
+  suite.test("signed and unsigned numeric widths", (): void => {
+    expectOrdered<int64>(int64(-9223372036854775808)).toBeLessThan(int64(-9223372036854775807));
+    expectOrdered<uint64>(uint64(18446744073709551615)).toBeGreaterThan(uint64(18446744073709551614));
+    expectOrdered<uint64>(uint64(0)).toBeLessThan(uint64(1));
+    expectOrdered<int8>(int8(-128)).toBeLessThan(int8(127));
+    expectOrdered<uint8>(uint8(255)).toBeGreaterThan(uint8(254));
+    expectOrdered<int32>(int32(2147483647)).toBeGreaterThan(int32(2147483646));
+    const duration: time.Duration = 2 * time.Second;
+    expectOrdered<time.Duration>(duration).toBeGreaterThan(time.Second);
+  });
+  suite.test("native floating point ordering", (): void => {
+    const adjacent = math.Nextafter32(float32(1), float32(2));
+    expectOrdered<float32>(adjacent).toBeGreaterThan(float32(1));
+    expectOrdered<float32>(float32(1)).toBeLessThan(adjacent);
+    expectOrdered(math.Inf(1)).toBeGreaterThan(math.MaxFloat64);
+    expectOrdered(math.Inf(-1)).toBeLessThan(-math.MaxFloat64);
+    expectOrdered(math.Inf(1)).toBeGreaterThanOrEqual(math.Inf(1));
+    expectOrdered(math.Inf(-1)).toBeLessThanOrEqual(math.Inf(-1));
+    const negativeZero = math.Copysign(float64(0), float64(-1));
+    expectOrdered(negativeZero).toBeGreaterThanOrEqual(float64(0));
+    expectOrdered(negativeZero).toBeLessThanOrEqual(float64(0));
+    expectOrdered(negativeZero).not.toBeGreaterThan(float64(0));
+    expectOrdered(negativeZero).not.toBeLessThan(float64(0));
+  });
+  suite.test("NaN comparisons retain native boolean results", (): void => {
+    const nan = math.NaN();
+    const matcher = expectOrdered<float64>(nan);
+    matcher.not.toBeGreaterThan(float64(1));
+    matcher.not.toBeGreaterThanOrEqual(float64(1));
+    matcher.not.toBeLessThan(float64(1));
+    matcher.not.toBeLessThanOrEqual(float64(1));
+    expectOrdered<float64>(float64(1)).not.toBeGreaterThan(nan);
+    expectOrdered<float64>(float64(1)).not.toBeLessThanOrEqual(nan);
+    new OrderedExpectation<float64>(nan).not.toBeGreaterThanOrEqual(nan);
+  });
+  suite.test("native string ordering with nominal types", (): void => {
+    expectOrdered<Label>(Label("金木犀")).toBeGreaterThan(Label("木"));
+    expectOrdered<Label>(Label("a\x00b")).toBeLessThan(Label("a\x00c"));
+    expectOrdered<string>("").toBeLessThanOrEqual("");
+    expectOrdered("a").not.toBeLessThan("a");
+  });
+  suite.runAndExit();
+}

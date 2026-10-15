@@ -1,0 +1,57 @@
+import { Suite, TestContext, Expectation, expect, skipTest } from "vasest";
+import go fmt from "fmt";
+
+type UserID = distinct int64;
+
+class Record {
+  public value: int;
+  constructor(value: int) { this.value = value; }
+}
+
+function main(): void {
+  const suite = new Suite("typed predicate matchers");
+  suite.test("explicit types and one invocation per check", (): void => {
+    const id = UserID(1152921504606846977);
+    let calls = 0;
+    const matches: (value: UserID) => boolean = (value: UserID): boolean => {
+      calls++;
+      return value == id;
+    };
+    const matcher: Expectation<UserID> = expect<UserID>(id);
+    expect(calls).toEqual(0);
+    matcher.toSatisfy(matches);
+    matcher.not.toSatisfy((value: UserID): boolean => { calls++; return value < UserID(0); });
+    matcher.toSatisfy(matches);
+    expect(calls).toEqual(3);
+    new Expectation<UserID>(id).toSatisfy(matches);
+    expect(id).toSatisfy(matches);
+    expect(calls).toEqual(5);
+  });
+  suite.test("typed nil and collection values", (): void => {
+    const missing: int[] = nil;
+    const empty: int[] = [];
+    expect<int[]>(missing).toSatisfy((value: int[]): boolean => { return value == nil; });
+    new Expectation<int[]>(empty).not.toSatisfy((value: int[]): boolean => { return value == nil; });
+    const values: Map<string, int> = makeMap[string, int]();
+    values["金木犀"] = 42;
+    expect<Map<string, int>>(values).toSatisfy((value: Map<string, int>): boolean => { return len(value) == 1; });
+  });
+  suite.test("class identity and native mutations", (): void => {
+    const record = new Record(42);
+    expect<Record>(record).toSatisfy((value: Record): boolean => {
+      value.value++;
+      return value == record;
+    });
+    expect(record.value).toEqual(43);
+    const values: int[] = [42];
+    expect(values).toSatisfy((value: int[]): boolean => { value[0]++; return true; });
+    expect(values[0]).toEqual(43);
+  });
+  suite.testWithContext("runtime skip propagates through negation", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("predicate-skip-cleanup"); });
+    expect(42).not.toSatisfy((value: int): boolean => { skipTest("predicate resource unavailable"); return false; });
+    fmt.Println("unreachable-predicate-skip");
+  });
+  suite.test("later case", (): void => { fmt.Println("predicate-passing-later"); });
+  suite.runAndExit();
+}

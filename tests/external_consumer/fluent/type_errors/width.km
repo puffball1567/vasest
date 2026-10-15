@@ -1,0 +1,6 @@
+import { expect } from "vasest";
+function main(): void {
+  const actual: int32 = 1;
+  const expected: int64 = 1;
+  expect<int32>(actual).toEqual(expected);
+}

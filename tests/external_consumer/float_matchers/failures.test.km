@@ -1,0 +1,31 @@
+import { Suite, TestContext, expectFloat } from "vasest";
+import go math from "math";
+import go fmt from "fmt";
+
+function main(): void {
+  const suite = new Suite("float matcher failures");
+  suite.afterEach((): void => { fmt.Println("float-afterEach"); });
+  suite.testWithContext("close mismatch", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("float-cleanup"); });
+    expectFloat(1.5).toBeCloseTo(1.0, 0.125);
+  });
+  suite.test("negated close mismatch", (): void => { expectFloat(1.125).not.toBeCloseTo(1.0, 0.125); });
+  suite.test("NaN mismatch", (): void => { expectFloat(1.0).toBeNaN(); });
+  suite.test("negated NaN mismatch", (): void => { expectFloat(math.NaN()).not.toBeNaN(); });
+  suite.test("finite mismatch", (): void => { expectFloat(math.Inf(1)).toBeFinite(); });
+  suite.test("negated finite mismatch", (): void => { expectFloat(1.0).not.toBeFinite(); });
+  suite.test("negative tolerance", (): void => { expectFloat(1.0).toBeCloseTo(1.0, -1.0); });
+  suite.test("negated negative tolerance", (): void => { expectFloat(1.0).not.toBeCloseTo(1.0, -1.0); });
+  suite.test("NaN tolerance", (): void => { expectFloat(1.0).toBeCloseTo(1.0, math.NaN()); });
+  suite.test("negated NaN tolerance", (): void => { expectFloat(1.0).not.toBeCloseTo(1.0, math.NaN()); });
+  suite.test("infinite tolerance", (): void => { expectFloat(1.0).toBeCloseTo(1.0, math.Inf(1)); });
+  suite.test("negated infinite tolerance", (): void => { expectFloat(1.0).not.toBeCloseTo(1.0, math.Inf(-1)); });
+  suite.test("NaN actual", (): void => { expectFloat(math.NaN()).toBeCloseTo(1.0, 0.0); });
+  suite.test("negated NaN actual", (): void => { expectFloat(math.NaN()).not.toBeCloseTo(1.0, 0.0); });
+  suite.test("infinite expected", (): void => { expectFloat(1.0).toBeCloseTo(math.Inf(-1), 0.0); });
+  suite.test("negated infinite expected", (): void => { expectFloat(1.0).not.toBeCloseTo(math.Inf(1), 0.0); });
+  suite.test("float32 close mismatch", (): void => { expectFloat<float32>(1.5).toBeCloseTo(1.0, 0.125); });
+  suite.test("float32 negated close mismatch", (): void => { expectFloat<float32>(1.0).not.toBeCloseTo(0.1, 0.9); });
+  suite.test("later case", (): void => { fmt.Println("float-failing-later"); });
+  suite.runAndExit();
+}

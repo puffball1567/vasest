@@ -1,0 +1,35 @@
+import { Suite, expectNoError, waitFor } from "vasest";
+import go fmt from "fmt";
+import go os from "os";
+import go exec from "os/exec";
+import go filepath from "path/filepath";
+import go time from "time";
+
+function main(): void {
+  const suite = new Suite("inherited output");
+  suite.test("subprocess output", (): void => {
+    if (os.Getenv("VASEST_PIPE_FIXED") == "1") {
+      fmt.Println("pipe-fixed");
+      return;
+    }
+    const child = exec.Command(os.Getenv("VASEST_PIPE_CHILD_BINARY"), "-test.run=^TestHeldOutputChildProcess$");
+    child.Env = append(os.Environ(), "VASEST_PIPE_CHILD=1");
+    child.Stdout = os.Stdout;
+    child.Stderr = os.Stderr;
+    expectNoError(child.Start());
+    expectNoError(child.Process.Release());
+    waitFor((): void => {
+      const [info, statError] = os.Stat(filepath.Join(os.Getenv("VASEST_PIPE_PROBE"), "ready"));
+      expectNoError(statError);
+    }, time.Second, time.Millisecond);
+    fmt.Println("pipe-parent-ready");
+    if (os.Getenv("VASEST_PIPE_RELEASE") == "1") {
+      expectNoError(os.WriteFile(filepath.Join(os.Getenv("VASEST_PIPE_PROBE"), "release"), [], 0600));
+      return;
+    }
+    if (os.Getenv("VASEST_PIPE_PARENT_EXIT") != "1") {
+      time.Sleep(5 * time.Second);
+    }
+  });
+  suite.runAndExit();
+}

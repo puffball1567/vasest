@@ -1,0 +1,2 @@
+import { expect } from "vasest";
+function main(): void { expect<int32>(int32(42)).toSatisfy((value: int64): boolean => { return true; }); }

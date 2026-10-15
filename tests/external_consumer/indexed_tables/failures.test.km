@@ -1,0 +1,36 @@
+import { Suite, TestContext, expect, skipTest, withTestLocation } from "vasest";
+import go fmt from "fmt";
+import go errors from "errors";
+
+type UserID = distinct int64;
+
+function main(): void {
+  const suite = new Suite("indexed failures");
+  const rows: UserID[] = [UserID(42), UserID(42), UserID(42)];
+  suite.afterEach((): void => { fmt.Println("indexed-afterEach"); });
+  suite.testEachIndexed<UserID>(rows, (value: UserID, index: int): string => { return fmt.Sprintf("plain %d", index); }, (value: UserID, index: int): void => {
+    if (index == 1) { expect(value).toEqual(UserID(0)); }
+  });
+  suite.testEachIndexedWithContext<UserID>(rows, (value: UserID, index: int): string => { return fmt.Sprintf("context %d", index); }, (value: UserID, index: int, context: TestContext): void => {
+    context.cleanup((): void => { fmt.Printf("indexed-context-cleanup-%d\n", index); });
+    if (index == 0) { withTestLocation("domain-check.km", 42, (): void => { throw errors.New("indexed body failed"); }); }
+    if (index == 1) { skipTest("indexed row unavailable"); }
+    if (index == 2) { throw errors.New("indexed raw body failed"); }
+  });
+  suite.testEachIndexedWithFixture<UserID, int>(rows, (value: UserID, index: int): string => { return fmt.Sprintf("fixture %d", index); },
+    (value: UserID, index: int, context: TestContext): int => {
+      fmt.Printf("indexed-setup-%d\n", index);
+      context.cleanup((): void => {
+        fmt.Printf("indexed-fixture-cleanup-%d\n", index);
+        if (index == 2) { withTestLocation("cleanup-check.km", 9, (): void => { throw errors.New("indexed cleanup failed"); }); }
+      });
+      if (index == 1) { withTestLocation("setup-check.km", 7, (): void => { throw errors.New("indexed setup failed"); }); }
+      return index;
+    }, (value: UserID, index: int, fixture: int, context: TestContext): void => {
+      expect(fixture).toEqual(index);
+      if (index == 0) { expect(value).toEqual(UserID(0)); }
+      if (index == 2) { skipTest("indexed cleanup resource unavailable"); }
+    });
+  suite.test("later case", (): void => { fmt.Println("indexed-failing-later"); });
+  suite.runAndExit();
+}

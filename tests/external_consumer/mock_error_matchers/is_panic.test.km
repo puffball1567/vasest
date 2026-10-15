@@ -1,0 +1,25 @@
+import { Suite, TestContext, MockAction, expectMockOutcome, expectFunction } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+import go reflect from "reflect";
+import go os from "os";
+
+class MatchingPanic implements error {
+  constructor() {}
+  public function Error(): string { return "matching panic"; }
+  public function Is(target: error): boolean { reflect.ValueOf(42).Index(0); return false; }
+}
+
+function main(): void {
+  const action = new MockAction<int>((value: int): void => { throw new MatchingPanic(); });
+  expectFunction((): void => { action.invoke(1); }).toThrow();
+  const suite = new Suite("mock error is native panic");
+  suite.afterEach((): void => { fmt.Println("mock-error-is-afterEach"); });
+  suite.afterAll((): void => { fmt.Println("mock-error-is-afterAll"); });
+  suite.testWithContext("native is panic", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("mock-error-is-cleanup"); });
+    expectMockOutcome(action).not.toHaveLastThrownCause(errors.New("target"));
+  });
+  suite.test("later case", (): void => { fmt.Println("unreachable-mock-error-is-later"); });
+  suite.runAndExit();
+}

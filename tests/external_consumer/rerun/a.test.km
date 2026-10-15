@@ -1,0 +1,19 @@
+import { Suite, expectTrue } from "vasest";
+import go fmt from "fmt";
+import go os from "os";
+
+function main(): void {
+  const other = new Suite("other suite");
+  other.beforeAll((): void => { fmt.Println("OTHER_SETUP"); });
+  other.test("case", (): void => { fmt.Println("OTHER_BODY"); });
+  other.run();
+
+  const suite = new Suite("選択 suite");
+  suite.beforeAll((): void => { expectTrue(os.Getenv("VASEST_RERUN_SHARED") != "1"); });
+  suite.test("case", (): void => { expectTrue(os.Getenv("VASEST_RERUN_FIXED") == "1"); });
+  suite.test("case extra", (): void => { fmt.Println("EXTRA_BODY"); });
+  suite.testEach([0, 1], (row: int): string => { return fmt.Sprintf("row %d", row); }, (row: int): void => {
+    expectTrue(row == 0 || os.Getenv("VASEST_RERUN_FIXED") == "1");
+  });
+  suite.runAndExit();
+}

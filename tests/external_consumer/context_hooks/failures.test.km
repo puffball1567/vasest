@@ -1,0 +1,32 @@
+import { Suite, TestContext, skipTest, withTestLocation } from "vasest";
+import go fmt from "fmt";
+import go errors from "errors";
+
+function main(): void {
+  const suite = new Suite("context hook failures");
+  let next = 0;
+  let current = -1;
+  suite.beforeEachWithContext((context: TestContext): void => {
+    const index = next;
+    next++; current = index;
+    context.cleanup((): void => {
+      fmt.Printf("context-hook-cleanup-%d\n", index);
+      if (index == 0) { withTestLocation("cleanup.km", 11, (): void => { throw errors.New("hook cleanup failed"); }); }
+    });
+    if (index == 0) { withTestLocation("setup.km", 7, (): void => { throw errors.New("hook setup failed"); }); }
+    if (index == 1) { skipTest("hook setup unavailable"); }
+  });
+  suite.afterEachWithContext((context: TestContext): void => {
+    fmt.Printf("context-hook-after-%d\n", current);
+    context.cleanup((): void => { fmt.Println("context-hook-after-cleanup"); });
+    if (current == 0 || current == 3) { withTestLocation("teardown.km", 9, (): void => { throw errors.New("hook teardown failed"); }); }
+    if (current == 2) { skipTest("hook teardown unavailable"); }
+  });
+  suite.test("setup teardown and cleanup", (): void => { fmt.Println("unreachable-setup-failed-body"); });
+  suite.test("setup skip", (): void => { fmt.Println("unreachable-setup-skipped-body"); });
+  suite.test("teardown skip fails", (): void => {});
+  suite.test("teardown failure", (): void => {});
+  suite.test("body failure", (): void => { withTestLocation("domain-check.km", 42, (): void => { throw errors.New("body failed"); }); });
+  suite.test("later case", (): void => { fmt.Println("context-hook-failing-later"); });
+  suite.runAndExit();
+}

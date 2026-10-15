@@ -1,0 +1,2 @@
+import { MockFn, MockExpectation } from "vasest";
+function main(): void { const mock = new MockFn<string, int>((value: string): int => { return 1; }); new MockExpectation<int>(mock).toHaveBeenCalled(); }

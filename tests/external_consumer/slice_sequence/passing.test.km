@@ -1,0 +1,90 @@
+import { Suite, SliceExpectation, NegatedSliceExpectation, expectSlice, expect } from "vasest";
+import go fmt from "fmt";
+import go math from "math";
+
+type UserID = distinct uint64;
+alias Callback = () => void;
+
+class Node {
+  public value: int;
+  public next: Node;
+  constructor(value: int) { this.value = value; this.next = nil; }
+}
+
+function main(): void {
+  const suite = new Suite("typed contiguous sequences");
+  suite.test("native values overlapping candidates and typed bindings", (): void => {
+    const large = UserID(18446744073709551615);
+    const values: UserID[] = [large, UserID(42), large, UserID(42), UserID(43)];
+    const required: UserID[] = [large, UserID(42), UserID(43)];
+    const matcher: SliceExpectation<UserID> = expectSlice<UserID>(values);
+    const check: (expected: UserID[]) => void = matcher.toContainSequence;
+    const negative: (expected: UserID[]) => void = matcher.not.toContainSequence;
+    check(required);
+    negative([large, large]);
+    new SliceExpectation<UserID>(values).toContainSequence(required);
+    new NegatedSliceExpectation<UserID>(values).toContainSequence([large, large]);
+    expectSlice(values).toContainSequence(required);
+    expectSlice(values).not.toContainSequence([UserID(43), large]);
+    expect<UserID>(values[0]).toEqual(large);
+    expect<UserID>(required[0]).toEqual(large);
+  });
+  suite.test("nil empty longer and noncontiguous fragments", (): void => {
+    const missing: int[] = nil;
+    const empty: int[] = [];
+    expectSlice<int>(missing).toContainSequence(empty);
+    expectSlice<int>(empty).toContainSequence(missing);
+    expectSlice<int>([1, 2, 3]).toContainSequence(empty);
+    expectSlice<int>(missing).not.toContainSequence([1]);
+    expectSlice<int>([1]).not.toContainSequence([1, 1]);
+    expectSlice<int>([1, 2, 1]).not.toContainSequence([1, 1]);
+    expectSlice<int>([1, 1, 2]).toContainSequence([1, 2]);
+  });
+  suite.test("nested native values", (): void => {
+    const missing: int[] = nil;
+    const empty: int[] = [];
+    const values: int[][] = [[42], missing, empty, [1, 2], [43]];
+    expectSlice<int[]>(values).toContainSequence([missing, empty, [1, 2]]);
+    expectSlice<int[]>(values).not.toContainSequence([empty, missing]);
+    expectSlice<int[]>(values).not.toContainSequence([[2, 1]]);
+    const first: Map<string, int> = makeMap[string, int]();
+    const second: Map<string, int> = makeMap[string, int]();
+    first["value"] = 42;
+    second["value"] = 42;
+    expectSlice<Map<string, int>>([first, first]).toContainSequence([second, second]);
+  });
+  suite.test("cycles functions and native float equality", (): void => {
+    const first = new Node(42);
+    const second = new Node(42);
+    first.next = first;
+    second.next = second;
+    const values: Node[] = [nil, first, first, nil];
+    expectSlice<Node>(values).toContainSequence([second, second]);
+    second.value = 43;
+    expectSlice<Node>(values).not.toContainSequence([second]);
+    expect<Node>(first.next).toBe(first);
+    const nans: float64[] = [math.NaN()];
+    expectSlice<float64>(nans).not.toContainSequence(nans);
+    expectSlice<float64[]>([nans]).toContainSequence([nans]);
+    expectSlice<float64>([math.Copysign(0, -1), math.Inf(1), math.Inf(-1)]).toContainSequence([float64(0), math.Inf(1)]);
+    const missing: () => void = nil;
+    const callback: () => void = (): void => {};
+    const functions: Callback[] = [callback, missing];
+    const required: Callback[] = [missing];
+    const nonmatching: Callback[] = [callback];
+    expectSlice<Callback>(functions).toContainSequence(required);
+    expectSlice<Callback>(functions).not.toContainSequence(nonmatching);
+  });
+  suite.test("saved matchers observe native backing values", (): void => {
+    let values: int[] = [1, 2, 3, 4];
+    const matcher = expectSlice<int>(values);
+    matcher.toContainSequence([2, 3]);
+    values[2] = 9;
+    matcher.not.toContainSequence([2, 3]);
+    matcher.toContainSequence([2, 9]);
+    values = [0];
+    matcher.toContainSequence([2, 9]);
+  });
+  suite.test("later case", (): void => { fmt.Println("slice-sequence-passing-later"); });
+  suite.runAndExit();
+}

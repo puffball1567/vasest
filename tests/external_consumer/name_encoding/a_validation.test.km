@@ -1,0 +1,59 @@
+import { Suite, expect, expectString, withEnv } from "vasest";
+import go fmt from "fmt";
+
+type UserID = distinct int64;
+
+function expectRejected(body: () => void, message: string): void {
+  let rejected = false;
+  try {
+    body();
+  } catch (err: error) {
+    expectString(err.Error()).toContain(message);
+    rejected = true;
+  }
+  expect<boolean>(rejected).toBe(true);
+}
+
+function main(): void {
+  const bytes: uint8[] = [uint8(255), uint8(0), uint8(254)];
+  const invalid = string(bytes);
+  expectRejected((): void => { const suite = new Suite(invalid); }, "suite name must be valid UTF-8");
+  const suite = new Suite("valid name registration");
+  suite.test("kept", (): void => { fmt.Println("encoding-values-preserved"); });
+  expectRejected((): void => { suite.test(invalid, (): void => {}); }, "test name must be valid UTF-8");
+  expectRejected((): void => { suite.skip(invalid, (): void => {}); }, "test name must be valid UTF-8");
+  expectRejected((): void => { suite.todo(invalid); }, "test name must be valid UTF-8");
+  const original = UserID(1152921504606846977);
+  const rows: UserID[] = [original, original];
+  expectRejected((): void => {
+    suite.testEachIndexed<UserID>(rows, (value: UserID, index: int): string => {
+      expect<UserID>(value).toEqual(original);
+      if (index == 1) {
+        return invalid;
+      }
+      return "uncommitted";
+    }, (value: UserID, index: int): void => { fmt.Println("encoding-uncommitted"); });
+  }, "test name must be valid UTF-8");
+  suite.test("é", (): void => { expect<string>(invalid).toEqual(invalid); });
+  suite.test("é", (): void => {
+    const prefix: uint8[] = [uint8(255)];
+    expectString(invalid).toStartWith(string(prefix));
+  });
+  suite.test("rejects unpaired JSON escapes before hooks", (): void => {
+    let calls = 0;
+    const nested = new Suite("suite�");
+    nested.beforeAll((): void => { calls++; });
+    nested.test("case�", (): void => { calls++; });
+    const selections: string[] = [
+      "{\"all\":false,\"suites\":[{\"name\":\"suite\\ud800\",\"cases\":[\"case�\"]}]}",
+      "{\"all\":false,\"suites\":[{\"name\":\"suite�\",\"cases\":[\"case\\udc00\"]}]}"
+    ];
+    for (const selection of selections) {
+      withEnv("VASEST_RERUN_SELECTION", selection, (): void => {
+        expectRejected((): void => { nested.run(); }, "paired Unicode surrogate escapes");
+      });
+      expect<int>(calls).toBe(0);
+    }
+  });
+  suite.runAndExit();
+}

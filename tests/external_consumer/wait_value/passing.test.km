@@ -1,0 +1,107 @@
+import { Suite, TestContext, expect, expectFunction, waitForValue, waitFor, skipTest, withTestLocation } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+import go time from "time";
+
+type UserID = distinct int64;
+
+class Record {
+  public value: int;
+  constructor(value: int) { this.value = value; }
+}
+
+function main(): void {
+  const suite = new Suite("typed waitForValue");
+  suite.test("explicit native types and callback bindings", (): void => {
+    let reads = 0;
+    let checks = 0;
+    const read: () => UserID = (): UserID => { reads++; return UserID(1152921504606846976 + int64(reads)); };
+    const ready: (value: UserID) => boolean = (value: UserID): boolean => { checks++; return value == UserID(1152921504606846979); };
+    const result: UserID = waitForValue<UserID>(read, ready, time.Second, time.Millisecond);
+    expect(result).toEqual(UserID(1152921504606846979));
+    expect(reads).toEqual(3);
+    expect(checks).toEqual(3);
+  });
+  suite.test("inferred class values preserve references and mutations", (): void => {
+    const original = new Record(42);
+    let reads = 0;
+    let checks = 0;
+    const result = waitForValue((): Record => { reads++; return original; }, (value: Record): boolean => { checks++; value.value++; return value == original; }, time.Second, time.Millisecond);
+    expect(result).toBe(original);
+    expect(original.value).toEqual(43);
+    expect(reads).toEqual(1);
+    expect(checks).toEqual(1);
+  });
+  suite.test("native nil collections and backing storage", (): void => {
+    const missing = waitForValue<int[]>((): int[] => { return nil; }, (value: int[]): boolean => { return value == nil; }, time.Second, time.Millisecond);
+    expect(missing).toBeNil();
+    const empty: int[] = [];
+    const result = waitForValue<int[]>((): int[] => { return empty; }, (value: int[]): boolean => { return value != nil && len(value) == 0; }, time.Second, time.Millisecond);
+    expect(result).not.toBeNil();
+    const values: int[] = [1, 2];
+    const shared = waitForValue<int[]>((): int[] => { return values; }, (value: int[]): boolean => { value[0] = 42; return true; }, time.Second, time.Millisecond);
+    expect(values[0]).toEqual(42);
+    shared[1] = 43;
+    expect(values[1]).toEqual(43);
+  });
+  suite.test("read throws false conditions and predicate throws are retried", (): void => {
+    let reads = 0;
+    let checks = 0;
+    const result = waitForValue<int>((): int => {
+      reads++;
+      if (reads == 1) { throw errors.New("read not ready"); }
+      return reads;
+    }, (value: int): boolean => {
+      checks++;
+      if (value == 3) { throw errors.New("condition not ready"); }
+      return value == 4;
+    }, time.Second, time.Millisecond);
+    expect(result).toEqual(4);
+    expect(reads).toEqual(4);
+    expect(checks).toEqual(3);
+    const original = errors.New("ordinary returned error");
+    const returned = waitForValue<error>((): error => { return original; }, (value: error): boolean => { return value == original; }, time.Second, time.Millisecond);
+    expect(returned).toBe(original);
+  });
+  let readSkips = 0;
+  let predicateSkips = 0;
+  let assertionSkips = 0;
+  suite.test("expired waits do not start another callback", (): void => {
+    let reads = 0;
+    expectFunction((): void => {
+      waitForValue<int>((): int => { reads++; return reads; }, (value: int): boolean => { return value > 1; }, 5 * time.Millisecond, time.Second);
+    }).toThrowMessage("timed out");
+    expect(reads).toEqual(1);
+    let assertions = 0;
+    expectFunction((): void => {
+      waitFor((): void => { assertions++; expect(assertions).toEqual(2); }, 5 * time.Millisecond, time.Second);
+    }).toThrowMessage("timed out");
+    expect(assertions).toEqual(1);
+  });
+  suite.testWithContext("runtime skip from read", (context: TestContext): void => {
+    context.cleanup((): void => { expect(readSkips).toEqual(1); fmt.Println("wait-value-skip-cleanup"); });
+    waitForValue<int>((): int => {
+      readSkips++;
+      withTestLocation("skip-check.km", 7, (): void => { skipTest("wait value resource unavailable"); });
+      return 42;
+    }, (value: int): boolean => { fmt.Println("unreachable-read-skip-predicate"); return true; }, time.Second, time.Millisecond);
+    fmt.Println("unreachable-read-skip-body");
+  });
+  suite.testWithContext("runtime skip from predicate", (context: TestContext): void => {
+    context.cleanup((): void => { expect(predicateSkips).toEqual(1); fmt.Println("wait-value-skip-cleanup"); });
+    waitForValue<int>((): int => { return 42; }, (value: int): boolean => { predicateSkips++; skipTest("wait value resource unavailable"); return true; }, time.Second, time.Millisecond);
+    fmt.Println("unreachable-predicate-skip-body");
+  });
+  suite.testWithContext("runtime skip from existing waitFor", (context: TestContext): void => {
+    context.cleanup((): void => { expect(assertionSkips).toEqual(1); fmt.Println("wait-value-skip-cleanup"); });
+    waitFor((): void => { assertionSkips++; skipTest("wait value resource unavailable"); }, time.Second, time.Millisecond);
+    fmt.Println("unreachable-assertion-skip-body");
+  });
+  suite.test("later case", (): void => {
+    expect(readSkips).toEqual(1);
+    expect(predicateSkips).toEqual(1);
+    expect(assertionSkips).toEqual(1);
+    fmt.Println("wait-value-passing-later");
+  });
+  suite.runAndExit();
+}

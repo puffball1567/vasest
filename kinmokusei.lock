@@ -1,0 +1,15 @@
+{
+  "lockVersion": 4,
+  "manifestHash": "sha256:08ef59efbf4bfc58d86bcaa46dfe9b38db9df58a77365ed28e2d12c95c0b7396",
+  "goVersion": "1.23",
+  "target": {
+    "goos": "linux",
+    "goarch": "amd64",
+    "cgoEnabled": false,
+    "tags": []
+  },
+  "goModHash": "sha256:dd33a2069ff5a298bfffa588326dfba5282d269da25d1d6a1ebe74acb4949e1d",
+  "goSumHash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "modules": null,
+  "goMod": "module github.com/puffball1567/vasest\n\ngo 1.23\n"
+}

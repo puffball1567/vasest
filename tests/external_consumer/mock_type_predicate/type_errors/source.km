@@ -1,0 +1,2 @@
+import { expectMockOutcome } from "vasest";
+function main(): void { expectMockOutcome(1).toHaveThrownTypeSatisfying<error>((value: error): boolean => { return true; }); }

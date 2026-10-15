@@ -1,0 +1,12 @@
+import { expectSlice, SliceExpectation } from "vasest";
+type UserID = distinct int64;
+type OtherID = distinct int64;
+function main(): void {
+  const values: UserID[] = [UserID(42)];
+  const others: OtherID[] = [OtherID(42)];
+  const wide: int64[] = [int64(42)];
+  const narrow: int32[] = [int32(42)];
+  const words: string[] = ["42"];
+  const nested: int64[][] = [[int64(42)]];
+  expectSlice<UserID>(values).toContainAll(UserID(42));
+}

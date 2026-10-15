@@ -1,0 +1,74 @@
+import { Suite, MockAction, expectEqual, expectThrowsMessage } from "vasest";
+import go errors from "errors";
+
+struct Event {
+  public topic: string;
+  public ids: int[];
+}
+
+function notify(send: (event: Event) => void): void {
+  send(Event { topic: "金木犀", ids: [1, 2] });
+}
+
+function main(): void {
+  const suite = new Suite("mock actions");
+  suite.test("success: records typed dependency calls", (): void => {
+    let received: string[] = [];
+    const send = new MockAction<Event>((event: Event): void => {
+      received = append(received, event.topic);
+    });
+    notify(send.invoke);
+    expectEqual(received, ["金木犀"]);
+    send.expectCalledTimes(1);
+    send.expectCalledWith(Event { topic: "金木犀", ids: [1, 2] });
+    send.expectNthCalledWith(1, Event { topic: "金木犀", ids: [1, 2] });
+    let calls = send.calls();
+    calls[0] = Event { topic: "changed", ids: [] };
+    expectEqual(send.calls()[0].topic, "金木犀");
+  });
+  suite.test("success: queued implementations fall back to default", (): void => {
+    let events: string[] = [];
+    const send = new MockAction<string>((value: string): void => {
+      events = append(events, "initial:" + value);
+    });
+    send.implementOnce((value: string): void => { events = append(events, "once:" + value); });
+    send.implement((value: string): void => { events = append(events, "default:" + value); });
+    send.clearCalls();
+    send.invoke("first");
+    send.invoke("second");
+    expectEqual(events, ["once:first", "default:second"]);
+    send.expectCalledTimes(2);
+    send.clearCalls();
+    send.expectCalledTimes(0);
+    send.invoke("third");
+    expectEqual(events, ["once:first", "default:second", "default:third"]);
+  });
+  suite.test("success: throwing implementations remain recorded", (): void => {
+    let received: string[] = [];
+    const send = new MockAction<string>((value: string): void => { received = append(received, value); });
+    send.implementOnce((value: string): void => { throw errors.New("notification failed"); });
+    expectThrowsMessage((): void => { send.invoke("first"); }, "notification failed");
+    send.invoke("second");
+    expectEqual(received, ["second"]);
+    send.expectCalledTimes(2);
+    send.expectNthCalledWith(1, "first");
+    expectThrowsMessage((): void => { send.implement(nil); }, "mock implementation must not be nil");
+    expectThrowsMessage((): void => { send.implementOnce(nil); }, "mock implementation must not be nil");
+  });
+  suite.test("call count mismatch", (): void => {
+    const send = new MockAction<int>((value: int): void => {});
+    send.invoke(1);
+    send.expectCalledTimes(2);
+  });
+  suite.test("argument mismatch", (): void => {
+    const send = new MockAction<string>((value: string): void => {});
+    send.invoke("actual");
+    send.expectCalledWith("expected");
+  });
+  suite.test("nth call mismatch", (): void => {
+    const send = new MockAction<int>((value: int): void => {});
+    send.invoke(1);
+    send.expectNthCalledWith(1, 2);
+  });
+  suite.runAndExit();
+}

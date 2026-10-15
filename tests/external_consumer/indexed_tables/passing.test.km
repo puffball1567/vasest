@@ -1,0 +1,92 @@
+import { Suite, FixtureSuite, TestContext, expect, expectFunction, skipTest } from "vasest";
+import go fmt from "fmt";
+import go errors from "errors";
+
+type UserID = distinct int64;
+
+class Record {
+  public value: int;
+  constructor(value: int) { this.value = value; }
+}
+
+struct RowFixture {
+  index: int;
+  context: TestContext;
+}
+
+function main(): void {
+  const original = UserID(1152921504606846977);
+  const values: UserID[] = [original, original, original];
+  const plain = new Suite("indexed plain rows");
+  const name: (value: UserID, index: int) => string = (value: UserID, index: int): string => { return fmt.Sprintf("plain %d", index); };
+  plain.testEachIndexed<UserID>(values, name, (value: UserID, index: int): void => {
+    expect(value).toEqual(original);
+    expect(index >= 0 && index < 3).toBe(true);
+    fmt.Printf("indexed-plain-body-%d\n", index);
+  });
+  values[0] = UserID(99);
+  plain.test("later case", (): void => { fmt.Println("indexed-passing-later"); });
+  plain.runAndExit();
+
+  const object = new Record(42);
+  const records: Record[] = [object, object];
+  const contexts = new Suite("indexed contexts");
+  contexts.testEachIndexedWithContext(records, (value: Record, index: int): string => { return fmt.Sprintf("context %d", index); }, (value: Record, index: int, context: TestContext): void => {
+    expect(value).toBe(object);
+    value.value++;
+    context.cleanup((): void => { fmt.Printf("indexed-context-cleanup-%d\n", index); });
+  });
+  contexts.afterAll((): void => { expect(object.value).toEqual(44); });
+  contexts.runAndExit();
+
+  const fixture = new Suite("indexed fixtures");
+  let setups = 0;
+  let bodies = 0;
+  let cleanups = 0;
+  const repeated: UserID[] = [original, original, original];
+  fixture.testEachIndexedWithFixture<UserID, RowFixture>(repeated, (value: UserID, index: int): string => { return fmt.Sprintf("fixture %d", index); },
+    (value: UserID, index: int, context: TestContext): RowFixture => {
+      setups++;
+      context.cleanup((): void => { cleanups++; fmt.Printf("indexed-fixture-cleanup-%d\n", index); });
+      if (index == 1) { skipTest("indexed fixture unavailable"); }
+      return RowFixture { index: index, context: context };
+    }, (value: UserID, index: int, resource: RowFixture, context: TestContext): void => {
+      bodies++;
+      expect(value).toEqual(original);
+      expect(resource.index).toEqual(index);
+      expect(resource.context).toBe(context);
+    });
+  fixture.afterAll((): void => { expect(setups).toEqual(3); expect(bodies).toEqual(2); expect(cleanups).toEqual(3); });
+  fixture.runAndExit();
+
+  const shared = new FixtureSuite<string>("indexed shared fixtures", (context: TestContext): string => {
+    context.cleanup((): void => { fmt.Println("indexed-shared-cleanup"); });
+    return "shared value";
+  });
+  shared.testEachIndexed<UserID>(repeated, (value: UserID, index: int): string => { return fmt.Sprintf("shared %d", index); }, (value: UserID, index: int, resource: string, context: TestContext): void => {
+    expect(value).toEqual(original);
+    expect(resource).toEqual("shared value");
+    context.cleanup((): void => { fmt.Printf("indexed-shared-row-cleanup-%d\n", index); });
+  });
+  shared.runAndExit();
+
+  const registration = new Suite("indexed registration");
+  registration.test("atomic registration and validation", (): void => {
+    const target = new Suite("never run");
+    const empty: UserID[] = [];
+    let names = 0;
+    const nameOf: (value: UserID, index: int) => string = (value: UserID, index: int): string => { names++; return fmt.Sprint(index); };
+    expectFunction((): void => { target.testEachIndexed<UserID>(repeated, nil, (value: UserID, index: int): void => {}); }).toThrowMessage("name callback must not be nil");
+    expectFunction((): void => { target.testEachIndexedWithContext<UserID>(empty, nameOf, (value: UserID, index: int, context: TestContext): void => {}); }).toThrowMessage("at least one value");
+    expectFunction((): void => { target.testEachIndexedWithFixture<UserID, string>(repeated, nameOf, nil, (value: UserID, index: int, resource: string, context: TestContext): void => {}); }).toThrowMessage("setup must not be nil");
+    expect(names).toEqual(0);
+    const sentinel = errors.New("name failed");
+    const caught = expectFunction((): void => {
+      target.testEachIndexed<UserID>(repeated, (value: UserID, index: int): string => { if (index == 1) { throw sentinel; } return fmt.Sprintf("staged %d", index); }, (value: UserID, index: int): void => { fmt.Println("unreachable-partial-body"); });
+    }).toThrow();
+    expect(caught).toBe(sentinel);
+    // Reusing the first staged name proves the failed batch did not register it.
+    target.test("staged 0", (): void => {});
+  });
+  registration.runAndExit();
+}

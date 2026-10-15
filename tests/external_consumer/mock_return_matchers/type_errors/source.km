@@ -1,0 +1,2 @@
+import { expectMockReturn } from "vasest";
+function main(): void { expectMockReturn<int>(42).toHaveReturned(); }

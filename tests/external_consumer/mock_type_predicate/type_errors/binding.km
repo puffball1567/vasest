@@ -1,0 +1,2 @@
+import { expectMockOutcome } from "vasest";
+function main(): void { const predicate: (value: error) => boolean = (value: int): boolean => { return true; }; expectMockOutcome(nil).toHaveThrownTypeSatisfying<error>(predicate); }

@@ -1,0 +1,49 @@
+import { Suite, Expectation, SliceExpectation, StringExpectation, expect, expectSlice, expectString } from "vasest";
+
+type UserID = distinct int;
+type OrderID = distinct int;
+
+function checkID<T>(value: T): void {
+  expect<T>(value).toEqual(value);
+  new Expectation<T>(value).not.toBeNil();
+}
+
+function main(): void {
+  const suite = new Suite("native typed matchers");
+  suite.test("explicit generic arguments and constructors", (): void => {
+    const id = UserID(42);
+    const matcher: Expectation<UserID> = expect<UserID>(id);
+    matcher.toEqual(UserID(42));
+    matcher.not.toEqual(UserID(43));
+    new Expectation<UserID>(id).toBe(UserID(42));
+    checkID<UserID>(id);
+    const ids: SliceExpectation<UserID> = expectSlice<UserID>([id]);
+    ids.toContain(UserID(42));
+    ids.not.toContain(UserID(43));
+    new SliceExpectation<UserID>([id]).toHaveLength(1);
+  });
+  suite.test("empty and nil need no inference", (): void => {
+    const empty: UserID[] = [];
+    expectSlice<UserID>(empty).toHaveLength(0);
+    new SliceExpectation<UserID>(empty).toHaveLength(0);
+    expectSlice<UserID>(nil).not.toContain(UserID(42));
+    expect<UserID[]>(empty).toEqual(empty);
+    expect<error>(nil).toBeNil();
+    new Expectation<error>(nil).toEqual(nil);
+  });
+  suite.test("slice elements use deep equality", (): void => {
+    expectSlice<int[]>([[1, 2]]).toContain([1, 2]);
+    expectSlice<int[]>([[1, 2]]).not.toContain([2, 1]);
+  });
+  suite.test("native string length and patterns", (): void => {
+    const text = expectString("金木犀");
+    text.toContain("木");
+    text.not.toContain("missing");
+    text.toMatch("^金.*犀$");
+    text.not.toMatch("^missing$");
+    text.toHaveLength(9);
+    text.not.toHaveLength(3);
+    new StringExpectation("").toHaveLength(0);
+  });
+  suite.runAndExit();
+}

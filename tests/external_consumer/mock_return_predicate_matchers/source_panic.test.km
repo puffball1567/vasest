@@ -1,0 +1,20 @@
+import { Suite, TestContext, MockReturnSource, MockResult, expectMockReturn } from "vasest";
+import go fmt from "fmt";
+import go reflect from "reflect";
+
+class PanickingSource implements MockReturnSource<int> {
+  constructor() {}
+  public function results(): MockResult<int>[] { reflect.ValueOf(42).Index(0); return []; }
+}
+
+function main(): void {
+  const suite = new Suite("mock return source native panic");
+  suite.afterEach((): void => { fmt.Println("return-predicate-source-afterEach"); });
+  suite.afterAll((): void => { fmt.Println("return-predicate-source-afterAll"); });
+  suite.testWithContext("native source panic", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("return-predicate-source-cleanup"); });
+    expectMockReturn<int>(new PanickingSource()).not.toHaveLastReturnedSatisfying((value: int): boolean => { return true; });
+  });
+  suite.test("later case", (): void => { fmt.Println("unreachable-return-predicate-source-later"); });
+  suite.runAndExit();
+}

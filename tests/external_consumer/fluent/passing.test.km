@@ -1,0 +1,46 @@
+import { Suite, expect, expectEqual, expectThrows } from "vasest";
+import go math from "math";
+import go os from "os";
+
+class Record {
+  public value: int;
+
+  constructor(value: int) {
+    this.value = value;
+  }
+}
+
+function main(): void {
+  const suite = new Suite("fluent matchers");
+  suite.test("typed equality and negation", (): void => {
+    expect(2 + 3).toEqual(5);
+    expect([1, 2]).toEqual([1, 2]);
+    expect("金木犀").not.toEqual("銀木犀");
+    const matcher = expect(true);
+    matcher.not.toBe(false);
+    matcher.toBe(true);
+  });
+  suite.test("object identity differs from deep equality", (): void => {
+    const first = new Record(42);
+    const second = new Record(42);
+    expect(first).toEqual(second);
+    expect(first).toBe(first);
+    expect(first).not.toBe(second);
+  });
+  suite.test("floating point same value", (): void => {
+    expect(math.NaN()).toBe(math.NaN());
+    expect(0.0).not.toBe(math.Copysign(0.0, -1.0));
+  });
+  suite.test("typed nil and existing assertions", (): void => {
+    let missing: *os.PathError = nil;
+    let missingError: error = nil;
+    expect(missing).toBeNil();
+    expect(missingError).toBeNil();
+    expect(false).not.toBeNil();
+    const failure = expectThrows((): void => {
+      expect([1]).not.toBe([2]);
+    });
+    expectEqual(failure.Error(), "toBe requires comparable values; use toEqual for collections");
+  });
+  suite.runAndExit();
+}

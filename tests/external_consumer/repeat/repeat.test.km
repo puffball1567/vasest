@@ -1,0 +1,34 @@
+import { Suite, expectEqual, expectTrue } from "vasest";
+import go fmt from "fmt";
+import go os from "os";
+import go strconv from "strconv";
+
+function main(): void {
+  const suite = new Suite("repetition");
+  const index = os.Getenv("VASEST_REPEAT_INDEX");
+  const count = os.Getenv("VASEST_REPEAT_COUNT");
+  let visits = 0;
+  suite.beforeAll((): void => {
+    expectEqual(visits, 0);
+  });
+  suite.beforeEach((): void => {
+    visits++;
+  });
+  suite.test("fails first", (): void => {
+    expectTrue(index != "1");
+  });
+  suite.test("fails second", (): void => {
+    expectTrue(index != "2");
+  });
+  suite.test("stable", (): void => {
+    const [iteration, iterationError] = strconv.Atoi(index);
+    const [total, totalError] = strconv.Atoi(count);
+    expectEqual(iterationError, nil);
+    expectEqual(totalError, nil);
+    expectTrue(iteration >= 1 && iteration <= total);
+  });
+  suite.afterAll((): void => {
+    fmt.Printf("repeat-marker:%s/%s visits=%d\n", index, count, visits);
+  });
+  suite.runAndExit();
+}

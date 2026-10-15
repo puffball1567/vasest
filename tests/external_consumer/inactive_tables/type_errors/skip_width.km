@@ -1,0 +1,7 @@
+import { Suite, FixtureSuite, TestContext } from "vasest";
+function main(): void {
+  const suite = new Suite("types");
+  const shared = new FixtureSuite<string>("types", (context: TestContext): string => { return "value"; });
+  const rows: int64[] = [int64(42)];
+  suite.skipEach<uint64>(rows, (value: uint64): string => { return "row"; }, (value: uint64): void => {});
+}

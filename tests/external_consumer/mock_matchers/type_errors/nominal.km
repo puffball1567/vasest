@@ -1,0 +1,4 @@
+import { MockAction, expectMock } from "vasest";
+type UserID = distinct int;
+type OrderID = distinct int;
+function main(): void { const mock = new MockAction<UserID>((value: UserID): void => {}); expectMock<UserID>(mock).not.toHaveBeenLastCalledWith(OrderID(42)); }

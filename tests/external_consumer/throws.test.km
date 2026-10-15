@@ -1,0 +1,18 @@
+import { Suite, expectEqual, expectThrows, expectThrowsMessage, runSuiteAndExit } from "vasest";
+import go errors from "errors";
+
+function main(): void {
+  runSuiteAndExit("throw assertions", (suite: Suite): void => {
+    suite.test("captures thrown error", (): void => {
+      const err = expectThrows((): void => {
+        throw errors.New("expected problem");
+      });
+      expectEqual(err.Error(), "expected problem");
+    });
+    suite.test("checks message", (): void => {
+      expectThrowsMessage((): void => {
+        throw errors.New("金木犀 failure");
+      }, "金木犀");
+    });
+  });
+}

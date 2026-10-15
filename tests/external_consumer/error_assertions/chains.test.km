@@ -1,0 +1,74 @@
+import { Suite, expectEqual, expectErrorAs, expectErrorIs, expectThrows, expectTrue, withTestLocation } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+import go os from "os";
+
+class CodedError implements error {
+  public code: int;
+
+  constructor(code: int) {
+    this.code = code;
+  }
+
+  public function Error(): string {
+    return fmt.Sprintf("code %d", this.code);
+  }
+}
+
+function main(): void {
+  const suite = new Suite("error chains");
+  suite.test("wrapped and joined causes", (): void => {
+    const cause = errors.New("missing data");
+    expectErrorIs(fmt.Errorf("load: %w", cause), cause);
+    expectErrorIs(errors.Join(errors.New("other"), fmt.Errorf("load: %w", cause)), cause);
+    expectErrorIs(nil, nil);
+  });
+  suite.test("messages do not replace identity", (): void => {
+    const first = errors.New("same message");
+    const second = errors.New("same message");
+    const failure = expectThrows((): void => {
+      expectErrorIs(first, second);
+    });
+    expectTrue(failure != nil);
+  });
+  suite.test("extract a native error", (): void => {
+    const original = os.PathError { Op: "open", Path: "missing", Err: os.ErrNotExist };
+    const wrapped = fmt.Errorf("load: %w", &original);
+    let found: *os.PathError = nil;
+    expectErrorAs(wrapped, &found);
+    expectTrue(found == &original);
+    expectEqual(found.Path, "missing");
+    expectErrorIs(found, os.ErrNotExist);
+  });
+  suite.test("extract an application error", (): void => {
+    const original = new CodedError(42);
+    const wrapped = errors.Join(errors.New("other"), fmt.Errorf("load: %w", original));
+    let found: CodedError = nil;
+    expectErrorAs(wrapped, &found);
+    expectTrue(found == original);
+    expectEqual(found.code, 42);
+  });
+  suite.test("interface and typed nil targets", (): void => {
+    const cause = errors.New("cause");
+    let found: error = nil;
+    expectErrorAs(cause, &found);
+    expectTrue(found == cause);
+    let empty: *os.PathError = nil;
+    let pathError: *os.PathError = nil;
+    expectErrorAs(empty, &pathError);
+    expectTrue(pathError == nil);
+  });
+  suite.test("located throws retain their cause and type", (): void => {
+    const original = new CodedError(27);
+    const thrown = expectThrows((): void => {
+      withTestLocation("explicit-errors.test.km", 27, (): void => {
+        throw original;
+      });
+    });
+    expectErrorIs(thrown, original);
+    let found: CodedError = nil;
+    expectErrorAs(thrown, &found);
+    expectEqual(found.code, 27);
+  });
+  suite.runAndExit();
+}

@@ -1,0 +1,76 @@
+import { Suite, TestContext, expectEqual, expectNoError, expectTrue, fail } from "vasest";
+import go os from "os";
+
+struct Resource {
+  path: string;
+}
+
+function prepare(context: TestContext): Resource {
+  const path = context.tempDir();
+  context.setEnv("VASEST_TYPED_FIXTURE", path);
+  return Resource { path: path };
+}
+
+function main(): void {
+  const suite = new Suite("typed fixtures");
+  const [original, existed] = os.LookupEnv("VASEST_TYPED_FIXTURE");
+  let paths: string[] = [];
+  let active = "";
+  const setup = (context: TestContext): Resource => {
+    const resource = prepare(context);
+    active = resource.path;
+    paths = append(paths, active);
+    context.cleanup((): void => {
+      expectEqual(os.Getenv("VASEST_TYPED_FIXTURE"), resource.path);
+      const [info, statError] = os.Stat(resource.path);
+      expectNoError(statError);
+      expectTrue(info.IsDir());
+    });
+    return resource;
+  };
+  suite.beforeEach((): void => {
+    const [value, set] = os.LookupEnv("VASEST_TYPED_FIXTURE");
+    expectEqual(value, original);
+    expectEqual(set, existed);
+    for (const path of paths) {
+      const [info, statError] = os.Stat(path);
+      expectTrue(os.IsNotExist(statError));
+    }
+  });
+  suite.afterEach((): void => {
+    expectEqual(os.Getenv("VASEST_TYPED_FIXTURE"), active);
+    const [info, statError] = os.Stat(active);
+    expectNoError(statError);
+  });
+  suite.afterAll((): void => {
+    const [value, set] = os.LookupEnv("VASEST_TYPED_FIXTURE");
+    expectEqual(value, original);
+    expectEqual(set, existed);
+    for (const path of paths) {
+      const [info, statError] = os.Stat(path);
+      expectTrue(os.IsNotExist(statError));
+    }
+  });
+  suite.testWithFixture("single passes", setup, (resource: Resource, context: TestContext): void => {
+    expectEqual(resource.path, active);
+    context.cleanup((): void => { expectEqual(os.Getenv("VASEST_TYPED_FIXTURE"), resource.path); });
+  });
+  suite.testEachWithFixture(["first passes", "setup fails", "body fails", "cleanup fails", "last passes"], (row: string): string => {
+    return row;
+  }, (row: string, context: TestContext): Resource => {
+    const resource = setup(context);
+    if (row == "setup fails") {
+      fail("fixture setup <&> failed");
+    }
+    if (row == "cleanup fails") {
+      context.cleanup((): void => { fail("fixture cleanup failed"); });
+    }
+    return resource;
+  }, (row: string, resource: Resource, context: TestContext): void => {
+    expectEqual(resource.path, active);
+    if (row == "body fails") {
+      fail("fixture body failed");
+    }
+  });
+  suite.runAndExit();
+}

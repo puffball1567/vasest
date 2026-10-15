@@ -1,0 +1,2 @@
+import { expectErrorValue } from "vasest";
+function main(): void { expectErrorValue(nil).toMatchTypeSatisfying<error>(true); }

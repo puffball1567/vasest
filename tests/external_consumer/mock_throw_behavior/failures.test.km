@@ -1,0 +1,42 @@
+import { Suite, TestContext, MockFn, MockAction, expect, expectFunction, withTestLocation } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+
+function main(): void {
+  const suite = new Suite("mock throw behavior failures");
+  const cause = errors.New("configured error");
+  suite.afterEach((): void => { fmt.Println("mock-throw-behavior-afterEach"); });
+  suite.testWithContext("function default throw", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("mock-throw-behavior-cleanup"); });
+    const mock = new MockFn<int, int>((value: int): int => { return 42; });
+    mock.throwError(cause); mock.invoke(1); fmt.Println("unreachable-function-default");
+  });
+  suite.testWithContext("function queued throw", (context: TestContext): void => {
+    const mock = new MockFn<int, int>((value: int): int => { return 42; });
+    mock.throwErrorOnce(cause);
+    context.cleanup((): void => { expect(mock.invoke(2)).toEqual(42); fmt.Println("mock-throw-behavior-queue-cleanup"); });
+    mock.invoke(1); fmt.Println("unreachable-function-queued");
+  });
+  suite.test("action default throw", (): void => {
+    const mock = new MockAction<int>((value: int): void => {});
+    mock.throwError(cause); mock.invoke(1); fmt.Println("unreachable-action-default");
+  });
+  suite.testWithContext("action queued throw", (context: TestContext): void => {
+    const mock = new MockAction<int>((value: int): void => {});
+    mock.throwErrorOnce(cause);
+    context.cleanup((): void => { mock.invoke(2); fmt.Println("mock-throw-behavior-queue-cleanup"); });
+    mock.invoke(1); fmt.Println("unreachable-action-queued");
+  });
+  suite.test("configured error location", (): void => {
+    const located = expectFunction((): void => { withTestLocation("configured.km", 42, (): void => { throw cause; }); }).toThrow();
+    const mock = new MockFn<int, int>((value: int): int => { return 42; });
+    mock.throwError(located); mock.invoke(1);
+  });
+  suite.test("explicit invoke location", (): void => {
+    const mock = new MockAction<int>((value: int): void => {});
+    mock.throwErrorOnce(cause);
+    withTestLocation("invocation.km", 27, (): void => { mock.invoke(1); });
+  });
+  suite.test("later case", (): void => { fmt.Println("mock-throw-behavior-failing-later"); });
+  suite.runAndExit();
+}

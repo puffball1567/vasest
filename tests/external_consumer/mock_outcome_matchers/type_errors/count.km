@@ -1,0 +1,2 @@
+import { MockAction, expectMockOutcome } from "vasest";
+function main(): void { const mock = new MockAction<int>((value: int): void => {}); expectMockOutcome(mock).toHaveReturnedTimes(float64(1)); }

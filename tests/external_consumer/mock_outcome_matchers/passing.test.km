@@ -1,0 +1,78 @@
+import { Suite, MockFn, MockAction, MockOutcomeResult, MockOutcomeSource, MockOutcomeExpectation, expectMockOutcome, expectFunction, expect } from "vasest";
+import go errors from "errors";
+
+type UserID = distinct int64;
+
+class Spy implements MockOutcomeSource {
+  public reads: int;
+  constructor() { this.reads = 0; }
+  public function outcomes(): MockOutcomeResult[] {
+    this.reads++;
+    const outcome = MockOutcomeResult { status: "throw", exception: errors.New("金木犀 spy failed") };
+    return [outcome];
+  }
+}
+
+function main(): void {
+  const suite = new Suite("shared mock outcome matchers");
+  suite.test("action normal completion and thrown messages", (): void => {
+    let invoked = 0;
+    const action = new MockAction<UserID>((value: UserID): void => { invoked++; });
+    action.implementOnce((value: UserID): void => { throw errors.New("金木犀 delivery failed"); });
+    const matcher: MockOutcomeExpectation = expectMockOutcome(action);
+    matcher.not.toHaveReturned();
+    matcher.not.toHaveThrown();
+    matcher.toHaveReturnedTimes(0);
+    matcher.toHaveThrownTimes(0);
+    matcher.not.toHaveNthThrownMessage(1, "failed");
+    matcher.not.toHaveLastThrownMessage("failed");
+    expect(invoked).toEqual(0);
+    expectFunction((): void => { action.invoke(UserID(42)); }).toThrowMessage("delivery failed");
+    matcher.toHaveThrown();
+    matcher.toHaveThrownTimes(1);
+    matcher.toHaveNthThrownMessage(1, "金木犀");
+    matcher.toHaveLastThrownMessage("delivery failed");
+    matcher.not.toHaveReturned();
+    matcher.not.toHaveThrownTimes(0);
+    matcher.not.toHaveNthThrownMessage(1, "missing");
+    matcher.not.toHaveLastThrownMessage("missing");
+    action.invoke(UserID(43));
+    matcher.toHaveReturned();
+    matcher.toHaveReturnedTimes(1);
+    matcher.not.toHaveReturnedTimes(0);
+    matcher.not.toHaveNthThrownMessage(2, "failed");
+    matcher.not.toHaveLastThrownMessage("failed");
+    matcher.toHaveNthThrownMessage(1, "delivery");
+    expect(invoked).toEqual(1);
+    const outcomes = action.outcomes();
+    outcomes[0] = MockOutcomeResult { status: "return", exception: nil };
+    matcher.toHaveThrownTimes(1);
+    action.clearCalls();
+    matcher.not.toHaveReturned();
+    matcher.not.toHaveThrown();
+  });
+  suite.test("returned error values and nil throws retain their status", (): void => {
+    const mock = new MockFn<UserID, error>((value: UserID): error => { return errors.New("returned error"); });
+    mock.invoke(UserID(42));
+    const matcher = new MockOutcomeExpectation(mock);
+    matcher.toHaveReturnedTimes(1);
+    matcher.not.toHaveThrown();
+    mock.implementOnce((value: UserID): error => { const missing: error = nil; throw missing; });
+    expectFunction((): void => { mock.invoke(UserID(43)); }).toThrow();
+    matcher.toHaveThrown();
+    matcher.toHaveThrownTimes(1);
+    matcher.not.toHaveLastThrownMessage("anything");
+    matcher.toHaveReturnedTimes(1);
+  });
+  suite.test("typed custom sources read one snapshot", (): void => {
+    const spy = new Spy();
+    const source: MockOutcomeSource = spy;
+    expectMockOutcome(source).toHaveThrownTimes(1);
+    expect(spy.reads).toEqual(1);
+    expectMockOutcome(spy).toHaveLastThrownMessage("金木犀");
+    expect(spy.reads).toEqual(2);
+    new MockOutcomeExpectation(source).not.toHaveNthThrownMessage(2, "failed");
+    expect(spy.reads).toEqual(3);
+  });
+  suite.runAndExit();
+}

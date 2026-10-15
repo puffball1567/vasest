@@ -1,0 +1,7 @@
+import { Suite, FixtureSuite, TestContext } from "vasest";
+function main(): void {
+  const suite = new Suite("types");
+  const shared = new FixtureSuite<string>("types", (context: TestContext): string => { return "value"; });
+  const rows: int64[] = [int64(42)];
+  const register: (values: int64[], name: (value: string) => string) => void = (values: int64[], name: (value: string) => string): void => { suite.todoEach<int64>(values, name); };
+}

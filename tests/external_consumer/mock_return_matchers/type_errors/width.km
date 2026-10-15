@@ -1,0 +1,2 @@
+import { MockFn, expectMockReturn } from "vasest";
+function main(): void { const mock = new MockFn<int, int32>((value: int): int32 => { return int32(value); }); expectMockReturn<int32>(mock).toHaveNthReturnedWith(1, int64(42)); }

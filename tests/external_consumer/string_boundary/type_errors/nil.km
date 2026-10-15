@@ -1,0 +1,4 @@
+import { expectString } from "vasest";
+function main(): void {
+  expectString("value").toStartWith(nil);
+}

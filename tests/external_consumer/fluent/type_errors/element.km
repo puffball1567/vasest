@@ -1,0 +1,4 @@
+import { expectSlice } from "vasest";
+function main(): void {
+  expectSlice<int>([1, 2]).toContain("1");
+}

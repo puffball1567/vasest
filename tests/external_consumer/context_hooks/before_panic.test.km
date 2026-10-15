@@ -1,0 +1,19 @@
+import { Suite, TestContext } from "vasest";
+import go fmt from "fmt";
+import go reflect from "reflect";
+
+function main(): void {
+  const suite = new Suite("context hook before panic");
+  suite.beforeEachWithContext((context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("context-before-panic-cleanup"); });
+    reflect.ValueOf(42).Index(0);
+  });
+  suite.afterEachWithContext((context: TestContext): void => {
+    fmt.Println("context-before-panic-afterEach");
+    context.cleanup((): void => { fmt.Println("context-before-panic-afterCleanup"); });
+  });
+  suite.afterAll((): void => { fmt.Println("context-before-panic-afterAll"); });
+  suite.test("native panic", (): void => { fmt.Println("unreachable-before-panic-body"); });
+  suite.test("later", (): void => { fmt.Println("unreachable-before-panic-later"); });
+  suite.runAndExit();
+}

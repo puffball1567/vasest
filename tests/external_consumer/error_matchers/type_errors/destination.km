@@ -1,0 +1,6 @@
+import { expectErrorValue } from "vasest";
+import go os from "os";
+function main(): void {
+  let wrong = 0;
+  expectErrorValue(nil).toMatchType<*os.PathError>(&wrong);
+}

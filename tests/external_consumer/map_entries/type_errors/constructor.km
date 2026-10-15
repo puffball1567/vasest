@@ -1,0 +1,6 @@
+import { MapExpectation, expectMap } from "vasest";
+function main(): void {
+  const actual: Map<string, int> = makeMap[string, int]();
+  const required: Map<int, int> = makeMap[int, int]();
+  new MapExpectation<string, int>(actual).toHaveEntries(required);
+}

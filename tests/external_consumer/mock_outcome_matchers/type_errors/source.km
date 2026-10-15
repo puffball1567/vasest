@@ -1,0 +1,2 @@
+import { expectMockOutcome } from "vasest";
+function main(): void { expectMockOutcome(42).toHaveThrown(); }

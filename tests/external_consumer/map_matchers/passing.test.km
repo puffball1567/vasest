@@ -1,0 +1,67 @@
+import { Suite, MapExpectation, expectMap, expect } from "vasest";
+
+type UserID = distinct int;
+
+class Record {
+  public value: int;
+  constructor(value: int) { this.value = value; }
+}
+
+function main(): void {
+  const suite = new Suite("typed map matchers");
+  suite.test("explicit types and native zero values", (): void => {
+    const values: Map<UserID, int> = makeMap[UserID, int]();
+    values[UserID(1)] = 0;
+    values[UserID(2)] = 42;
+    const matcher: MapExpectation<UserID, int> = expectMap<UserID, int>(values);
+    matcher.toHaveKey(UserID(1));
+    matcher.toHaveEntry(UserID(1), 0);
+    matcher.not.toHaveKey(UserID(3));
+    matcher.not.toHaveEntry(UserID(3), 0);
+    matcher.not.toHaveEntry(UserID(2), 43);
+    matcher.toHaveLength(2);
+    matcher.not.toHaveLength(0);
+    new MapExpectation<UserID, int>(values).toHaveEntry(UserID(2), 42);
+    expectMap(values).toHaveKey(UserID(1));
+  });
+  suite.test("nil and empty maps need no inference", (): void => {
+    const empty: Map<UserID, int> = makeMap[UserID, int]();
+    const missing: Map<UserID, int> = nil;
+    expectMap<UserID, int>(empty).toHaveLength(0);
+    expectMap<UserID, int>(missing).not.toHaveEntry(UserID(1), 0);
+    new MapExpectation<UserID, int>(missing).not.toHaveKey(UserID(1));
+  });
+  suite.test("nested and nil values retain deep equality", (): void => {
+    const values: Map<string, int[]> = makeMap[string, int[]]();
+    values["nested"] = [1, 2];
+    values["nil"] = nil;
+    const empty: int[] = [];
+    expectMap<string, int[]>(values).toHaveEntry("nested", [1, 2]);
+    expectMap<string, int[]>(values).toHaveEntry("nil", nil);
+    expectMap<string, int[]>(values).not.toHaveEntry("nil", empty);
+  });
+  suite.test("class keys use identity and values use content", (): void => {
+    const first = new Record(42);
+    const second = new Record(42);
+    const keys: Map<Record, int> = makeMap[Record, int]();
+    keys[first] = 1;
+    expectMap<Record, int>(keys).toHaveKey(first);
+    expectMap<Record, int>(keys).not.toHaveKey(second);
+    const values: Map<string, Record> = makeMap[string, Record]();
+    values["record"] = first;
+    expectMap<string, Record>(values).toHaveEntry("record", second);
+  });
+  suite.test("a saved matcher observes native map updates", (): void => {
+    const values: Map<string, int> = makeMap[string, int]();
+    const matcher = expectMap(values);
+    values["金木犀"] = 42;
+    matcher.toHaveEntry("金木犀", 42);
+    matcher.toHaveLength(1);
+    values["金木犀"] = 43;
+    matcher.not.toHaveEntry("金木犀", 42);
+    const [actual, present] = values["金木犀"];
+    expect(present).toBe(true);
+    expect(actual).toEqual(43);
+  });
+  suite.runAndExit();
+}

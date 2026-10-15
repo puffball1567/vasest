@@ -1,0 +1,8 @@
+import { expectSlice, SliceExpectation, NegatedSliceExpectation } from "vasest";
+type UserID = distinct int64;
+type OtherID = distinct int64;
+function main(): void {
+  const values: UserID[] = [UserID(42)];
+  const required: OtherID[] = [OtherID(42)];
+  expectSlice<UserID>(values).toContainInOrder(required);
+}

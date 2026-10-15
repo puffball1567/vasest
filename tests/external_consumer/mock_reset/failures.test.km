@@ -1,0 +1,44 @@
+import { Suite, TestContext, MockFn, MockAction, expect, expectMock, expectMockReturn, expectMockOutcome, skipTest, withTestLocation } from "vasest";
+import go fmt from "fmt";
+import go errors from "errors";
+
+function main(): void {
+  const suite = new Suite("mock reset failures");
+  suite.afterEach((): void => { fmt.Println("mock-reset-afterEach"); });
+  suite.testWithContext("new function implementation throws", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("mock-reset-cleanup"); });
+    const mock = new MockFn<int, int>((value: int): int => { return 1; });
+    mock.returnValueOnce(42);
+    mock.reset((value: int): int => { withTestLocation("domain-check.km", 42, (): void => { throw errors.New("replacement failed"); }); return 0; });
+    mock.invoke(1);
+  });
+  suite.test("cleared call history fails old expectation", (): void => {
+    const mock = new MockFn<int, int>((value: int): int => { return value; });
+    mock.invoke(42); mock.reset((value: int): int => { return value; });
+    expectMock<int>(mock).toHaveBeenCalled();
+  });
+  suite.test("cleared result history fails old expectation", (): void => {
+    const mock = new MockFn<int, int>((value: int): int => { return value; });
+    mock.invoke(42); mock.reset((value: int): int => { return value; });
+    expectMockReturn<int>(mock).toHaveReturned();
+  });
+  suite.test("cleared action history fails old expectation", (): void => {
+    const action = new MockAction<int>((value: int): void => {});
+    action.invoke(42); action.reset((value: int): void => {});
+    expectMockOutcome(action).toHaveReturned();
+  });
+  suite.testWithContext("new action implementation throws", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("mock-reset-cleanup"); });
+    const action = new MockAction<int>((value: int): void => {});
+    action.reset((value: int): void => { throw errors.New("action replacement failed"); });
+    action.invoke(1);
+  });
+  suite.testWithContext("new implementation skips", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("mock-reset-skip-cleanup"); });
+    const mock = new MockFn<int, int>((value: int): int => { return 0; });
+    mock.reset((value: int): int => { skipTest("replacement unavailable"); return 0; });
+    mock.invoke(42); fmt.Println("unreachable-reset-skip");
+  });
+  suite.test("later case", (): void => { fmt.Println("mock-reset-failing-later"); });
+  suite.runAndExit();
+}

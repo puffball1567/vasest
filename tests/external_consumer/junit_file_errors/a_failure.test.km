@@ -1,0 +1,50 @@
+import { Suite, expect, expectNoError, withTestLocation } from "vasest";
+import go fmt from "fmt";
+import go os from "os";
+import go reflect from "reflect";
+import go time from "time";
+
+function main(): void {
+  const mode = os.Getenv("VASEST_JUNIT_FILE_MODE");
+  const fixed = os.Getenv("VASEST_JUNIT_FILE_FIXED") == "1";
+  const suite = new Suite("completed assertion suite");
+  suite.afterEach((): void => { fmt.Println("junit-file-cleanup"); });
+  suite.test("early assertion", (): void => {
+    if (fixed) {
+      expect<int>(42).toEqual(42);
+      fmt.Println("junit-file-fixed");
+      return;
+    }
+    withTestLocation("domain-check.km", 42, (): void => { expect<int>(1).toEqual(2); });
+  });
+  suite.test("later case", (): void => { fmt.Println("junit-file-later-case"); });
+  if (mode == "framework" || fixed) {
+    suite.runAndExit();
+    return;
+  }
+  suite.run();
+  if (mode == "unreadable" || mode == "unreadable-exit2" || mode == "unreadable-panic" || mode == "unreadable-timeout") {
+    const reportPath = os.Getenv("VASEST_REPORT_PATH");
+    expectNoError(os.Remove(reportPath));
+    expectNoError(os.Mkdir(reportPath, 0700));
+  }
+  if (mode == "invalid" || mode == "both" || mode == "invalid-panic" || mode == "invalid-timeout") {
+    const [report, openError] = os.OpenFile(os.Getenv("VASEST_REPORT_PATH"), os.O_APPEND | os.O_WRONLY, 0600);
+    expectNoError(openError);
+    const [written, writeError] = report.WriteString("not JSON\n");
+    expectNoError(writeError);
+    expectNoError(report.Close());
+  }
+  if (mode == "panic" || mode == "invalid-panic" || mode == "unreadable-panic") {
+    reflect.ValueOf(42).Index(0);
+  }
+  if (mode == "exit1") {
+    os.Exit(1);
+  }
+  if (mode == "exit2" || mode == "both" || mode == "unreadable-exit2") {
+    os.Exit(2);
+  }
+  if (mode == "timeout" || mode == "invalid-timeout" || mode == "unreadable-timeout") {
+    time.Sleep(5 * time.Second);
+  }
+}

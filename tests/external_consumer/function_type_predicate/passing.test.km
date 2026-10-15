@@ -1,0 +1,82 @@
+import { Suite, TestContext, FunctionExpectation, NegatedFunctionExpectation, expectFunction, expect, skipTest } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+import go os from "os";
+
+type ErrorCode = distinct int64;
+class DomainError implements error {
+  public code: ErrorCode;
+  public reads: int;
+  constructor(code: ErrorCode) { this.code = code; this.reads = 0; }
+  public function Error(): string { this.reads++; throw errors.New("unexpected Error call"); }
+  public function String(): string { return "domain"; }
+}
+
+function main(): void {
+  const suite = new Suite("typed function error predicates");
+  suite.test("explicit inferred bindings constructors and lazy body", (): void => {
+    const original = new DomainError(ErrorCode(1152921504606846977));
+    let bodies = 0;
+    let predicates = 0;
+    const body: () => void = (): void => { bodies++; throw original; };
+    const predicate: (value: DomainError) => boolean = (value: DomainError): boolean => { predicates++; return value == original && value.code == ErrorCode(1152921504606846977); };
+    const matcher: FunctionExpectation = expectFunction(body);
+    expect(bodies).toEqual(0);
+    matcher.toThrowTypeSatisfying<DomainError>(predicate);
+    matcher.toThrowTypeSatisfying(predicate);
+    new FunctionExpectation(body).toThrowTypeSatisfying<DomainError>(predicate);
+    new NegatedFunctionExpectation(body).toThrowTypeSatisfying<DomainError>((value: DomainError): boolean => { predicates++; return false; });
+    expect(bodies).toEqual(4); expect(predicates).toEqual(4); expect(original.reads).toEqual(0);
+  });
+  suite.test("fresh bodies and normal returns skip predicates", (): void => {
+    let bodies = 0;
+    const matcher = expectFunction((): void => { bodies++; if (bodies == 1) { throw errors.New("first"); } });
+    matcher.toThrowTypeSatisfying<error>((value: error): boolean => { return value.Error() == "first"; });
+    matcher.not.toThrowTypeSatisfying<error>((value: error): boolean => { fmt.Println("unreachable-normal-return-predicate"); return true; });
+    expect(bodies).toEqual(2);
+  });
+  suite.test("native references mutations and mismatch diagnostics", (): void => {
+    const original = new DomainError(ErrorCode(1));
+    const matcher = expectFunction((): void => { throw original; });
+    matcher.toThrowTypeSatisfying<DomainError>((value: DomainError): boolean => { value.code = ErrorCode(1152921504606846978); return true; });
+    matcher.toThrowTypeSatisfying<DomainError>((value: DomainError): boolean => { return value.code == ErrorCode(1152921504606846978); });
+    expectFunction((): void => { matcher.toThrowTypeSatisfying<DomainError>((value: DomainError): boolean => { return false; }); }).toThrowMessage("satisfying predicate");
+    expectFunction((): void => { matcher.not.toThrowTypeSatisfying<DomainError>((value: DomainError): boolean => { return true; }); }).toThrowMessage("not to throw");
+    expect(original.reads).toEqual(0);
+  });
+  suite.test("native chains interfaces and first selected match", (): void => {
+    const original = new DomainError(ErrorCode(42));
+    const wrapped = errors.Join(errors.New("other"), original);
+    const matcher = expectFunction((): void => { throw wrapped; });
+    matcher.toThrowTypeSatisfying<DomainError>((value: DomainError): boolean => { return value == original; });
+    matcher.toThrowTypeSatisfying<fmt.Stringer>((value: fmt.Stringer): boolean => { return value.String() == "domain"; });
+    const first = new DomainError(ErrorCode(1));
+    expectFunction((): void => { throw errors.Join(first, original); }).not.toThrowTypeSatisfying<DomainError>((value: DomainError): boolean => { return value == original; });
+    const path = os.PathError { Op: "open", Path: "missing", Err: os.ErrNotExist };
+    expectFunction((): void => { throw fmt.Errorf("load: %w", &path); }).toThrowTypeSatisfying<*os.PathError>((value: *os.PathError): boolean => { return value == &path && value.Path == "missing"; });
+  });
+  suite.test("missing types nil throws and typed nil selection", (): void => {
+    const unexpected: (value: DomainError) => boolean = (value: DomainError): boolean => { fmt.Println("unreachable-missing-type-predicate"); return true; };
+    const missing: error = nil;
+    expectFunction((): void => { throw missing; }).not.toThrowTypeSatisfying<DomainError>(unexpected);
+    expectFunction((): void => { throw errors.New("other"); }).not.toThrowTypeSatisfying<DomainError>(unexpected);
+    const typedNil: DomainError = nil;
+    expectFunction((): void => { throw typedNil; }).toThrowTypeSatisfying<DomainError>((value: DomainError): boolean => { return value == nil; });
+    expectFunction((): void => { throw typedNil; }).not.toThrowTypeSatisfying<DomainError>((value: DomainError): boolean => { return value != nil; });
+  });
+  suite.test("body skip remains a thrown outcome", (): void => {
+    expectFunction((): void => { skipTest("body unavailable"); }).toThrowTypeSatisfying<error>((value: error): boolean => { return value.Error() == "body unavailable"; });
+  });
+  suite.testWithContext("positive predicate skip", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("function-type-predicate-skip-cleanup"); });
+    expectFunction((): void => { throw errors.New("body"); }).toThrowTypeSatisfying<error>((value: error): boolean => { skipTest("predicate unavailable"); return false; });
+    fmt.Println("unreachable-positive-skip");
+  });
+  suite.testWithContext("negative predicate skip", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("function-type-predicate-skip-cleanup"); });
+    expectFunction((): void => { throw errors.New("body"); }).not.toThrowTypeSatisfying<error>((value: error): boolean => { skipTest("predicate unavailable"); return true; });
+    fmt.Println("unreachable-negative-skip");
+  });
+  suite.test("later case", (): void => { fmt.Println("function-type-predicate-passing-later"); });
+  suite.runAndExit();
+}

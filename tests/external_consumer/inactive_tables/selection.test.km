@@ -1,0 +1,23 @@
+import { FixtureSuite, TestContext, expect } from "vasest";
+import go fmt from "fmt";
+
+type RowID = distinct uint64;
+
+function main(): void {
+  const rows: RowID[] = [RowID(18446744073709551615), RowID(18446744073709551615)];
+  const suite = new FixtureSuite<RowID>("inactive selection", (context: TestContext): RowID => {
+    fmt.Println("inactive-shared-setup");
+    context.cleanup((): void => { fmt.Println("inactive-shared-cleanup"); });
+    return rows[0];
+  });
+  suite.beforeEachWithContext((fixture: RowID, context: TestContext): void => { fmt.Println("inactive-case-before"); });
+  suite.afterEachWithContext((fixture: RowID, context: TestContext): void => { fmt.Println("inactive-case-after"); });
+  suite.skipEachIndexed<RowID>(rows, (row: RowID, index: int): string => { return fmt.Sprintf("skip %d", index); }, (row: RowID, index: int, fixture: RowID, context: TestContext): void => { fmt.Println("unreachable-skipped-body"); });
+  suite.todoEachIndexed<RowID>(rows, (row: RowID, index: int): string => { return fmt.Sprintf("todo %d", index); });
+  suite.test("active row", (fixture: RowID, context: TestContext): void => {
+    expect(fixture).toEqual(RowID(18446744073709551615));
+    context.cleanup((): void => { fmt.Println("inactive-case-cleanup"); });
+    fmt.Println("inactive-active-body");
+  });
+  suite.runAndExit();
+}

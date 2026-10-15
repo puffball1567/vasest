@@ -1,0 +1,34 @@
+import { Suite, TestContext, expectMap, withTestLocation } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+
+function main(): void {
+  const suite = new Suite("map collection failures");
+  const values: Map<string, int> = makeMap[string, int]();
+  values["one"] = 1;
+  values["two"] = 2;
+  const empty: Map<string, int> = nil;
+  suite.afterEach((): void => { fmt.Println("map-collection-afterEach"); });
+  suite.testWithContext("any mismatch", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("map-collection-cleanup"); });
+    expectMap<string, int>(values).toSatisfyAny((key: string, value: int): boolean => { return value < 0; });
+  });
+  suite.test("all mismatch", (): void => { expectMap(values).toSatisfyAll((key: string, value: int): boolean => { return key == "one"; }); });
+  suite.test("negated any mismatch", (): void => { expectMap(values).not.toSatisfyAny((key: string, value: int): boolean => { return value == 2; }); });
+  suite.test("negated all mismatch", (): void => { expectMap(values).not.toSatisfyAll((key: string, value: int): boolean => { return value > 0; }); });
+  suite.test("nil any predicate", (): void => { expectMap<string, int>(empty).toSatisfyAny(nil); });
+  suite.test("negated nil any predicate", (): void => { expectMap<string, int>(empty).not.toSatisfyAny(nil); });
+  suite.test("nil all predicate", (): void => { expectMap<string, int>(empty).toSatisfyAll(nil); });
+  suite.test("negated nil all predicate", (): void => { expectMap<string, int>(empty).not.toSatisfyAll(nil); });
+  suite.test("thrown predicate", (): void => {
+    expectMap<string, int>(values).not.toSatisfyAny((key: string, value: int): boolean => { throw errors.New("predicate callback failed"); });
+  });
+  suite.test("explicit callback location", (): void => {
+    expectMap<string, int>(values).toSatisfyAll((key: string, value: int): boolean => {
+      withTestLocation("domain-check.km", 42, (): void => { throw errors.New("domain predicate failed"); });
+      return true;
+    });
+  });
+  suite.test("later case", (): void => { fmt.Println("map-collection-failing-later"); });
+  suite.runAndExit();
+}

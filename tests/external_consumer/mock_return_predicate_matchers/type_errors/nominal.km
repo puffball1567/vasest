@@ -1,0 +1,5 @@
+import { MockFn, MockReturnExpectation, expectMockReturn } from "vasest";
+type UserID = distinct int64;
+function main(): void {
+  const mock = new MockFn<int, UserID>((value: int): UserID => { return UserID(value); }); expectMockReturn<UserID>(mock).not.toHaveLastReturnedSatisfying((value: int64): boolean => { return true; });
+}

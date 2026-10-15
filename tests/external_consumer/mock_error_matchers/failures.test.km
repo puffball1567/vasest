@@ -1,0 +1,37 @@
+import { Suite, TestContext, MockAction, MockOutcomeSource, expectMockOutcome, expectFunction } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+import go os from "os";
+
+function main(): void {
+  const suite = new Suite("mock error matcher failures");
+  const cause = errors.New("cause");
+  const action = new MockAction<int>((value: int): void => { throw fmt.Errorf("wrapped: %w", cause); });
+  expectFunction((): void => { action.invoke(1); }).toThrow();
+  suite.afterEach((): void => { fmt.Println("mock-error-afterEach"); });
+  suite.testWithContext("nth cause", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("mock-error-cleanup"); });
+    expectMockOutcome(action).toHaveNthThrownCause(1, errors.New("cause"));
+  });
+  suite.test("last cause", (): void => { expectMockOutcome(action).toHaveLastThrownCause(nil); });
+  suite.test("nth type", (): void => { let found: *os.PathError = nil; expectMockOutcome(action).toHaveNthThrownType<*os.PathError>(1, &found); });
+  suite.test("last type", (): void => { let found: *os.PathError = nil; expectMockOutcome(action).toHaveLastThrownType<*os.PathError>(&found); });
+  suite.test("negated nth cause", (): void => { expectMockOutcome(action).not.toHaveNthThrownCause(1, cause); });
+  suite.test("negated last cause", (): void => { expectMockOutcome(action).not.toHaveLastThrownCause(cause); });
+  suite.test("negated nth type", (): void => { expectMockOutcome(action).not.toHaveNthThrownType<error>(1); });
+  suite.test("negated last type", (): void => { expectMockOutcome(action).not.toHaveLastThrownType<error>(); });
+  suite.test("invalid cause index", (): void => { expectMockOutcome(action).toHaveNthThrownCause(0, cause); });
+  suite.test("negated invalid cause index", (): void => { expectMockOutcome(action).not.toHaveNthThrownCause(-1, cause); });
+  suite.test("invalid type index", (): void => { let found: error = nil; expectMockOutcome(action).toHaveNthThrownType<error>(0, &found); });
+  suite.test("negated invalid type index", (): void => { expectMockOutcome(action).not.toHaveNthThrownType<error>(0); });
+  suite.test("nil nth destination", (): void => { expectMockOutcome(action).toHaveNthThrownType<error>(1, nil); });
+  suite.test("nil last destination", (): void => { expectMockOutcome(action).toHaveLastThrownType<error>(nil); });
+  suite.test("invalid nth type", (): void => { let found = 0; expectMockOutcome(action).toHaveNthThrownType<int>(1, &found); });
+  suite.test("invalid last type", (): void => { let found = 0; expectMockOutcome(action).toHaveLastThrownType<int>(&found); });
+  suite.test("negated invalid nth type", (): void => { expectMockOutcome(action).not.toHaveNthThrownType<int>(1); });
+  suite.test("negated invalid last type", (): void => { expectMockOutcome(action).not.toHaveLastThrownType<int>(); });
+  suite.test("nil source", (): void => { const source: MockOutcomeSource = nil; expectMockOutcome(source).toHaveLastThrownCause(cause); });
+  suite.test("typed nil source", (): void => { const source: MockAction<int> = nil; expectMockOutcome(source).not.toHaveLastThrownType<error>(); });
+  suite.test("later case", (): void => { fmt.Println("mock-error-later"); });
+  suite.runAndExit();
+}

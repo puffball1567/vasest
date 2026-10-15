@@ -1,0 +1,75 @@
+import { Suite, FixtureSuite, TestContext, expect, expectFunction, expectNoError } from "vasest";
+import go fmt from "fmt";
+import go os from "os";
+
+type UserID = distinct int64;
+
+function main(): void {
+  const suite = new Suite("context hook lifecycle");
+  const original = os.Getenv("VASEST_CONTEXT_HOOK_DATA");
+  let saved: TestContext = nil;
+  let path = "";
+  let before = 0;
+  let after = 0;
+  let cleaned = 0;
+  suite.beforeEach((): void => { fmt.Println("unreachable-replaced-before"); });
+  suite.beforeEachWithContext((context: TestContext): void => {
+    before++;
+    saved = context;
+    path = context.tempDir();
+    context.setEnv("VASEST_CONTEXT_HOOK_DATA", path);
+    context.cleanup((): void => { cleaned++; fmt.Println("context-hook-before-cleanup"); });
+  });
+  suite.afterEach((): void => { fmt.Println("unreachable-replaced-after"); });
+  suite.afterEachWithContext((context: TestContext): void => {
+    after++;
+    expect(context).toBe(saved);
+    expect(os.Getenv("VASEST_CONTEXT_HOOK_DATA")).toEqual(path);
+    const [info, statError] = os.Stat(path);
+    expectNoError(statError);
+    context.cleanup((): void => { fmt.Println("context-hook-after-cleanup"); });
+  });
+  expectFunction((): void => { suite.beforeEachWithContext(nil); }).toThrowMessage("must not be nil");
+  expectFunction((): void => { suite.afterEachWithContext(nil); }).toThrowMessage("must not be nil");
+  suite.test("ordinary body uses hook resources", (): void => { expect(os.Getenv("VASEST_CONTEXT_HOOK_DATA")).toEqual(path); });
+  suite.testWithContext("context body receives same context", (context: TestContext): void => { expect(context).toBe(saved); });
+  suite.testWithFixture<TestContext>("fixture receives same context", (context: TestContext): TestContext => { expect(context).toBe(saved); return context; }, (fixture: TestContext, context: TestContext): void => { expect(fixture).toBe(context); });
+  suite.testEachIndexedWithContext<int>([42, 42], (value: int, index: int): string => { return fmt.Sprintf("row %d", index); }, (value: int, index: int, context: TestContext): void => { expect(context).toBe(saved); expect(value).toEqual(42); });
+  suite.skip("disabled", (): void => { fmt.Println("unreachable-skipped-body"); });
+  suite.todo("planned");
+  suite.afterAll((): void => {
+    expect(before).toEqual(5); expect(after).toEqual(5); expect(cleaned).toEqual(5);
+    expect(os.Getenv("VASEST_CONTEXT_HOOK_DATA")).toEqual(original);
+    const [info, statError] = os.Stat(path);
+    expect(os.IsNotExist(statError)).toBe(true);
+    expectFunction((): void => { saved.cleanup((): void => {}); }).toThrowMessage("closed");
+  });
+  suite.runAndExit();
+
+  let sharedContext: TestContext = nil;
+  let sharedCleanups = 0;
+  const shared = new FixtureSuite<UserID>("typed shared context hooks", (context: TestContext): UserID => {
+    context.cleanup((): void => { fmt.Println("context-hook-shared-cleanup"); });
+    return UserID(1152921504606846977);
+  });
+  shared.beforeEachWithContext((fixture: UserID, context: TestContext): void => {
+    expect(fixture).toEqual(UserID(1152921504606846977));
+    sharedContext = context;
+    context.cleanup((): void => { sharedCleanups++; });
+  });
+  shared.afterEachWithContext((fixture: UserID, context: TestContext): void => {
+    expect(context).toBe(sharedContext);
+    expect(fixture).toEqual(UserID(1152921504606846977));
+  });
+  shared.testEachIndexed<int>([42, 42], (value: int, index: int): string => { return fmt.Sprintf("shared row %d", index); }, (value: int, index: int, fixture: UserID, context: TestContext): void => { expect(context).toBe(sharedContext); });
+  shared.afterAll((fixture: UserID): void => { expect(sharedCleanups).toEqual(2); });
+  shared.runAndExit();
+
+  const replacement = new Suite("ordinary hook replacement");
+  replacement.beforeEachWithContext((context: TestContext): void => { fmt.Println("unreachable-context-before"); });
+  replacement.afterEachWithContext((context: TestContext): void => { fmt.Println("unreachable-context-after"); });
+  replacement.beforeEach((): void => { fmt.Println("context-hook-ordinary-before"); });
+  replacement.afterEach((): void => { fmt.Println("context-hook-ordinary-after"); });
+  replacement.test("later case", (): void => { fmt.Println("context-hook-passing-later"); });
+  replacement.runAndExit();
+}

@@ -1,0 +1,4 @@
+import { MockFn, expectMockReturn } from "vasest";
+type UserID = distinct int;
+type OrderID = distinct int;
+function main(): void { const mock = new MockFn<int, UserID>((value: int): UserID => { return UserID(value); }); expectMockReturn<UserID>(mock).not.toHaveLastReturnedWith(OrderID(42)); }

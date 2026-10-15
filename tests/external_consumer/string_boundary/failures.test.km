@@ -1,0 +1,27 @@
+import { Suite, TestContext, expectString, withTestLocation } from "vasest";
+import go fmt from "fmt";
+
+function main(): void {
+  const suite = new Suite("string boundary failures");
+  suite.afterEach((): void => { fmt.Println("string-boundary-afterEach"); });
+  suite.afterAll((): void => { fmt.Println("string-boundary-afterAll"); });
+  suite.testWithContext("missing prefix", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("string-boundary-cleanup"); });
+    expectString("service/result.json").toStartWith("other/");
+  });
+  suite.test("negated matching prefix", (): void => { expectString("service/result.json").not.toStartWith("service/"); });
+  suite.test("missing suffix", (): void => { expectString("service/result.json").toEndWith(".txt"); });
+  suite.test("negated matching suffix", (): void => { expectString("service/result.json").not.toEndWith(".json"); });
+  suite.test("negated empty prefix", (): void => { expectString("value").not.toStartWith(""); });
+  suite.test("negated empty suffix", (): void => { expectString("").not.toEndWith(""); });
+  suite.test("literal regex characters", (): void => { expectString("abbb").toStartWith("a[b]+"); });
+  suite.test("quoted byte diagnostics", (): void => {
+    const values: uint8[] = [uint8(255), uint8(0), uint8(10)];
+    expectString(string(values)).toEndWith("text\n");
+  });
+  suite.test("explicit location", (): void => {
+    withTestLocation("domain-check.km", 42, (): void => { expectString("value").toStartWith("prefix"); });
+  });
+  suite.test("later case", (): void => { fmt.Println("string-boundary-failing-later"); });
+  suite.runAndExit();
+}

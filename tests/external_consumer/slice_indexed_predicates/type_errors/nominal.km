@@ -1,0 +1,5 @@
+import { SliceExpectation, expectSlice } from "vasest";
+type UserID = distinct int64;
+function main(): void {
+  const values: UserID[] = [UserID(42)]; expectSlice<UserID>(values).not.toSatisfyAnyIndexed((value: int64, index: int): boolean => { return true; });
+}

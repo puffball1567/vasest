@@ -1,0 +1,109 @@
+import { Suite, TestContext, MapExpectation, expectMap, expect, skipTest } from "vasest";
+import go fmt from "fmt";
+import go math from "math";
+
+type UserID = distinct uint64;
+type Score = distinct int64;
+
+class Record {
+  public value: int;
+  constructor(value: int) { this.value = value; }
+}
+
+function main(): void {
+  const suite = new Suite("typed map collection predicates");
+  suite.test("native keys values and aggregate negation", (): void => {
+    const first = UserID(18446744073709551615);
+    const score = Score(1152921504606846977);
+    const values: Map<UserID, Score> = makeMap[UserID, Score]();
+    values[first] = score;
+    values[UserID(42)] = Score(-1);
+    const matcher: MapExpectation<UserID, Score> = expectMap<UserID, Score>(values);
+    const positive: (key: UserID, value: Score) => boolean = (key: UserID, value: Score): boolean => { return key == first && value == score; };
+    matcher.toSatisfyAny(positive);
+    matcher.not.toSatisfyAll(positive);
+    new MapExpectation<UserID, Score>(values).toSatisfyAll((key: UserID, value: Score): boolean => { return key == first || value == Score(-1); });
+    expectMap(values).not.toSatisfyAny((key: UserID, value: Score): boolean => { return key == UserID(0); });
+    let calls = 0;
+    matcher.toSatisfyAny((key: UserID, value: Score): boolean => { calls++; return true; });
+    expect(calls).toEqual(1);
+    matcher.not.toSatisfyAll((key: UserID, value: Score): boolean => { calls++; return false; });
+    expect(calls).toEqual(2);
+    matcher.toSatisfyAll((key: UserID, value: Score): boolean => { calls++; return true; });
+    expect(calls).toEqual(4);
+    matcher.not.toSatisfyAny((key: UserID, value: Score): boolean => { calls++; return false; });
+    expect(calls).toEqual(6);
+    const checkAny: (predicate: (key: UserID, value: Score) => boolean) => void = matcher.toSatisfyAny;
+    checkAny(positive);
+  });
+  suite.test("empty and nil maps invoke no callback", (): void => {
+    const absent: Map<string, int> = nil;
+    const empty: Map<string, int> = makeMap[string, int]();
+    let calls = 0;
+    const predicate: (key: string, value: int) => boolean = (key: string, value: int): boolean => { calls++; return false; };
+    expectMap<string, int>(absent).not.toSatisfyAny(predicate);
+    expectMap<string, int>(absent).toSatisfyAll(predicate);
+    new MapExpectation<string, int>(empty).not.toSatisfyAny(predicate);
+    new MapExpectation<string, int>(empty).toSatisfyAll(predicate);
+    expect(calls).toEqual(0);
+  });
+  suite.test("native references and nested values", (): void => {
+    const object = new Record(42);
+    const objects: Map<Record, Record> = makeMap[Record, Record]();
+    objects[object] = object;
+    expectMap<Record, Record>(objects).toSatisfyAll((key: Record, value: Record): boolean => { value.value++; return key == object && value == object; });
+    expect(object.value).toEqual(43);
+    const nested: Map<string, int[]> = makeMap[string, int[]]();
+    const absent: int[] = nil;
+    const empty: int[] = [];
+    nested["nil"] = absent;
+    nested["empty"] = empty;
+    nested["value"] = [42];
+    expectMap<string, int[]>(nested).toSatisfyAll((key: string, value: int[]): boolean => {
+      if (key == "nil") { return value == nil; }
+      if (key == "empty") { return value != nil && len(value) == 0; }
+      value[0]++;
+      return true;
+    });
+    expect(nested["value"][0]).toEqual(43);
+  });
+  suite.test("NaN entries retain their original values", (): void => {
+    const values: Map<float64, int> = makeMap[float64, int]();
+    const nan = math.NaN();
+    values[nan] = 42;
+    values[nan] = 43;
+    let calls = 0;
+    let total = 0;
+    expectMap<float64, int>(values).toSatisfyAll((key: float64, value: int): boolean => { calls++; total += value; return math.IsNaN(key) && (value == 42 || value == 43); });
+    expect(calls).toEqual(2);
+    expect(total).toEqual(85);
+  });
+  suite.test("saved matchers re-read native maps", (): void => {
+    const values: Map<string, int> = makeMap[string, int]();
+    values["entry"] = 42;
+    const matcher = expectMap<string, int>(values);
+    const positive: (key: string, value: int) => boolean = (key: string, value: int): boolean => { return key == "entry" && value > 0; };
+    matcher.toSatisfyAny(positive);
+    values["entry"] = -1;
+    matcher.not.toSatisfyAny(positive);
+    matcher.not.toSatisfyAll(positive);
+    matcher.toSatisfyAll((key: string, value: int): boolean => { values[key] = 99; return value == -1; });
+    expect(values["entry"]).toEqual(99);
+  });
+  suite.testWithContext("skip in negated any", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("map-collection-skip-cleanup"); });
+    const values: Map<string, int> = makeMap[string, int]();
+    values["entry"] = 42;
+    expectMap<string, int>(values).not.toSatisfyAny((key: string, value: int): boolean => { skipTest("map collection resource unavailable"); return false; });
+    fmt.Println("unreachable-map-collection-skip");
+  });
+  suite.testWithContext("skip in positive all", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("map-collection-skip-cleanup"); });
+    const values: Map<string, int> = makeMap[string, int]();
+    values["entry"] = 42;
+    expectMap<string, int>(values).toSatisfyAll((key: string, value: int): boolean => { skipTest("map collection resource unavailable"); return true; });
+    fmt.Println("unreachable-map-collection-skip");
+  });
+  suite.test("later case", (): void => { fmt.Println("map-collection-passing-later"); });
+  suite.runAndExit();
+}

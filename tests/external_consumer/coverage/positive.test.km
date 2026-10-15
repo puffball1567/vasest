@@ -1,0 +1,8 @@
+import { Suite, expectEqual } from "vasest";
+import { classify } from "./calculator";
+
+function main(): void {
+  const suite = new Suite("positive coverage");
+  suite.test("positive value", (): void => { expectEqual(classify(3), 1); });
+  suite.runAndExit();
+}

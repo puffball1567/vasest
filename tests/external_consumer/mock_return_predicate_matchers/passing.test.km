@@ -1,0 +1,135 @@
+import { Suite, TestContext, MockFn, MockResult, MockReturnSource, MockReturnExpectation, expectMockReturn, expectFunction, expect, skipTest } from "vasest";
+import go fmt from "fmt";
+import go errors from "errors";
+
+type UserID = distinct int64;
+
+class Record {
+  public value: int;
+  public note: string;
+  constructor(value: int, note: string) { this.value = value; this.note = note; }
+}
+
+class Spy implements MockReturnSource<UserID> {
+  public reads: int;
+  constructor() { this.reads = 0; }
+  public function results(): MockResult<UserID>[] {
+    this.reads++;
+    const thrown = MockResult<UserID> { status: "throw", value: UserID(0), exception: nil };
+    const returned = MockResult<UserID> { status: "return", value: UserID(42), exception: nil };
+    return [thrown, returned];
+  }
+}
+
+function main(): void {
+  const suite = new Suite("typed mock return predicate matchers");
+  suite.test("explicit native types preserve queued behavior and live returns", (): void => {
+    const first = UserID(1152921504606846977);
+    let invocations = 0;
+    let predicates = 0;
+    const mock = new MockFn<int, UserID>((value: int): UserID => { invocations++; return UserID(value); });
+    mock.returnValueOnce(first);
+    const matches: (value: UserID) => boolean = (value: UserID): boolean => { predicates++; return value == first; };
+    const matcher: MockReturnExpectation<UserID> = expectMockReturn<UserID>(mock);
+    matcher.not.toHaveReturnedSatisfying(matches);
+    matcher.not.toHaveNthReturnedSatisfying(1, matches);
+    matcher.not.toHaveLastReturnedSatisfying(matches);
+    expect(predicates).toEqual(0);
+    expect(mock.invoke(1)).toEqual(first);
+    matcher.toHaveReturnedSatisfying(matches);
+    matcher.toHaveNthReturnedSatisfying(1, matches);
+    matcher.toHaveLastReturnedSatisfying(matches);
+    expect(mock.invoke(2)).toEqual(UserID(2));
+    expectMockReturn(mock).toHaveReturnedSatisfying(matches);
+    matcher.not.toHaveNthReturnedSatisfying(2, matches);
+    matcher.not.toHaveLastReturnedSatisfying(matches);
+    expect(predicates).toEqual(6);
+    expect(invocations).toEqual(1);
+    mock.clearCalls();
+    matcher.not.toHaveReturnedSatisfying(matches);
+    expect(predicates).toEqual(6);
+  });
+  suite.test("typed application return values with constructors", (): void => {
+    const original = new Record(42, "金木犀");
+    const mock = new MockFn<int, Record>((value: int): Record => { return original; });
+    mock.invoke(1);
+    new MockReturnExpectation<Record>(mock).toHaveReturnedSatisfying((value: Record): boolean => { return value.value == 42; });
+    expectMockReturn<Record>(mock).toHaveNthReturnedSatisfying(1, (value: Record): boolean => { return value == original; });
+    expectMockReturn(mock).toHaveLastReturnedSatisfying((value: Record): boolean => { value.value++; return value.note == "金木犀"; });
+    expect(original.value).toEqual(43);
+    expectMockReturn(mock).not.toHaveNthReturnedSatisfying(2, (value: Record): boolean => { return true; });
+  });
+  suite.test("nil returns and empty returns differ from throwing placeholders", (): void => {
+    const mock = new MockFn<int, int[]>((value: int): int[] => { return nil; });
+    const empty: int[] = [];
+    mock.invoke(1);
+    mock.returnValueOnce(empty);
+    mock.invoke(2);
+    mock.implementOnce((value: int): int[] => { const missing: error = nil; throw missing; });
+    expectFunction((): void => { mock.invoke(3); }).toThrow();
+    expectMockReturn<int[]>(mock).toHaveReturnedSatisfying((value: int[]): boolean => { return value == nil; });
+    expectMockReturn<int[]>(mock).toHaveNthReturnedSatisfying(2, (value: int[]): boolean => { return value != nil && len(value) == 0; });
+    let predicates = 0;
+    expectMockReturn<int[]>(mock).not.toHaveLastReturnedSatisfying((value: int[]): boolean => { predicates++; return true; });
+    expectMockReturn<int[]>(mock).not.toHaveNthReturnedSatisfying(3, (value: int[]): boolean => { predicates++; return true; });
+    expect(predicates).toEqual(0);
+  });
+  suite.test("custom sources read one snapshot and skip nonreturn values", (): void => {
+    const spy = new Spy();
+    const source: MockReturnSource<UserID> = spy;
+    const matcher = new MockReturnExpectation<UserID>(source);
+    matcher.toHaveReturnedSatisfying((value: UserID): boolean => { return value == UserID(42); });
+    matcher.toHaveNthReturnedSatisfying(2, (value: UserID): boolean => { return value == UserID(42); });
+    matcher.toHaveLastReturnedSatisfying((value: UserID): boolean => { return value == UserID(42); });
+    matcher.not.toHaveReturnedSatisfying((value: UserID): boolean => { return value < UserID(0); });
+    matcher.not.toHaveNthReturnedSatisfying(1, (value: UserID): boolean => { throw errors.New("throw placeholder was evaluated"); });
+    matcher.not.toHaveLastReturnedSatisfying((value: UserID): boolean => { return value < UserID(0); });
+    expect(spy.reads).toEqual(6);
+  });
+  suite.test("callbacks may clear and add returns while one snapshot is inspected", (): void => {
+    const mock = new MockFn<int, int>((value: int): int => { return value; });
+    mock.invoke(1);
+    mock.invoke(2);
+    let calls = 0;
+    let sum = 0;
+    expectMockReturn<int>(mock).not.toHaveReturnedSatisfying((value: int): boolean => {
+      calls++;
+      sum += value;
+      mock.clearCalls();
+      mock.invoke(3);
+      return false;
+    });
+    expect(calls).toEqual(2);
+    expect(sum).toEqual(3);
+    expect(mock.callCount()).toEqual(1);
+    expectMockReturn(mock).toHaveLastReturnedSatisfying((value: int): boolean => { return value == 3; });
+  });
+  suite.test("normally returned errors are available to predicates", (): void => {
+    const sentinel = errors.New("returned error");
+    const mock = new MockFn<int, error>((value: int): error => { return sentinel; });
+    mock.invoke(1);
+    expectMockReturn<error>(mock).toHaveReturnedSatisfying((value: error): boolean => { return value == sentinel; });
+    mock.implementOnce((value: int): error => { throw sentinel; });
+    expectFunction((): void => { mock.invoke(2); }).toThrow();
+    expectMockReturn<error>(mock).not.toHaveLastReturnedSatisfying((value: error): boolean => { throw errors.New("throw was evaluated as return"); });
+  });
+  const mock = new MockFn<int, int>((value: int): int => { return value; });
+  mock.invoke(42);
+  suite.testWithContext("runtime skip through negated any", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("return-predicate-skip-cleanup"); });
+    expectMockReturn<int>(mock).not.toHaveReturnedSatisfying((value: int): boolean => { skipTest("return predicate resource unavailable"); return false; });
+    fmt.Println("unreachable-return-predicate-skip");
+  });
+  suite.testWithContext("runtime skip through positive nth", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("return-predicate-skip-cleanup"); });
+    expectMockReturn(mock).toHaveNthReturnedSatisfying(1, (value: int): boolean => { skipTest("return predicate resource unavailable"); return true; });
+    fmt.Println("unreachable-return-predicate-skip");
+  });
+  suite.testWithContext("runtime skip through negated last", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("return-predicate-skip-cleanup"); });
+    expectMockReturn(mock).not.toHaveLastReturnedSatisfying((value: int): boolean => { skipTest("return predicate resource unavailable"); return false; });
+    fmt.Println("unreachable-return-predicate-skip");
+  });
+  suite.test("later case", (): void => { fmt.Println("return-predicate-passing-later"); });
+  suite.runAndExit();
+}

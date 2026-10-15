@@ -1,0 +1,6 @@
+import { expectFunction, FunctionExpectation, NegatedFunctionExpectation } from "vasest";
+import go os from "os";
+function main(): void {
+  const matcher = expectFunction((): void => {});
+  matcher.toThrowSatisfying((exception: *os.PathError): boolean => { return true; });
+}

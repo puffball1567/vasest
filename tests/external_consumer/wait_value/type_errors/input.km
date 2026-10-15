@@ -1,0 +1,9 @@
+import { waitForValue } from "vasest";
+import go time from "time";
+type UserID = distinct int64;
+type OtherID = distinct int64;
+function main(): void {
+  const read: () => UserID = (): UserID => { return UserID(42); };
+  const ready: (value: UserID) => boolean = (value: UserID): boolean => { return true; };
+  waitForValue<UserID>(read, (value: string): boolean => { return true; }, time.Second, time.Millisecond);
+}

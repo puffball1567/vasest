@@ -1,0 +1,43 @@
+import { Suite, TestContext, SliceExpectation, expectSlice, withTestLocation } from "vasest";
+import go fmt from "fmt";
+import go math from "math";
+
+function main(): void {
+  const suite = new Suite("unordered slice failures");
+  suite.afterEach((): void => { fmt.Println("unordered-slice-afterEach"); });
+  suite.testWithContext("different multiplicity", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("unordered-slice-cleanup"); });
+    expectSlice<int>([1, 1]).toEqualUnordered([1, 2]);
+  });
+  suite.test("negated reordered equality", (): void => {
+    new SliceExpectation<int>([1, 2]).not.toEqualUnordered([2, 1]);
+  });
+  suite.test("different length", (): void => { expectSlice<int>([1, 2]).toEqualUnordered([1]); });
+  suite.test("nil versus empty", (): void => {
+    const missing: int[] = nil;
+    const empty: int[] = [];
+    expectSlice<int>(missing).toEqualUnordered(empty);
+  });
+  suite.test("negated nil equality", (): void => {
+    const missing: int[] = nil;
+    expectSlice<int>(missing).not.toEqualUnordered(missing);
+  });
+  suite.test("negated empty equality", (): void => {
+    const empty: int[] = [];
+    new SliceExpectation<int>(empty).not.toEqualUnordered(empty);
+  });
+  suite.test("nested order remains significant", (): void => {
+    const actual: int[][] = [[1, 2]];
+    const expected: int[][] = [[2, 1]];
+    expectSlice<int[]>(actual).toEqualUnordered(expected);
+  });
+  suite.test("NaN element", (): void => {
+    const values: float64[] = [math.NaN()];
+    expectSlice<float64>(values).toEqualUnordered(values);
+  });
+  suite.test("explicit failure location", (): void => {
+    withTestLocation("domain-check.km", 42, (): void => { expectSlice<int>([1, 1]).toEqualUnordered([1, 2]); });
+  });
+  suite.test("later case", (): void => { fmt.Println("unordered-slice-failing-later"); });
+  suite.runAndExit();
+}

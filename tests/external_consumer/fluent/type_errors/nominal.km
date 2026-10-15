@@ -1,0 +1,6 @@
+import { expectSlice } from "vasest";
+type UserID = distinct int;
+type OrderID = distinct int;
+function main(): void {
+  expectSlice<UserID>([UserID(1)]).toContain(OrderID(1));
+}

@@ -1,0 +1,5 @@
+import { expectSlice } from "vasest";
+function main(): void {
+  const empty: int[] = [];
+  expectSlice<int>(empty).toHaveLength("0");
+}

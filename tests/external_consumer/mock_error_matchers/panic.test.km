@@ -1,0 +1,20 @@
+import { Suite, TestContext, MockOutcomeResult, MockOutcomeSource, expectMockOutcome } from "vasest";
+import go fmt from "fmt";
+import go reflect from "reflect";
+
+class PanickingSource implements MockOutcomeSource {
+  constructor() {}
+  public function outcomes(): MockOutcomeResult[] { reflect.ValueOf(42).Index(0); return []; }
+}
+
+function main(): void {
+  const suite = new Suite("mock error source native panic");
+  suite.afterEach((): void => { fmt.Println("mock-error-source-afterEach"); });
+  suite.afterAll((): void => { fmt.Println("mock-error-source-afterAll"); });
+  suite.testWithContext("native outcome source panic", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("mock-error-source-cleanup"); });
+    expectMockOutcome(new PanickingSource()).not.toHaveLastThrownType<error>();
+  });
+  suite.test("later case", (): void => { fmt.Println("unreachable-mock-error-source-later"); });
+  suite.runAndExit();
+}

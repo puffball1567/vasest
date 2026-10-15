@@ -1,0 +1,20 @@
+import { Suite, TestContext, MockCallSource, expectMock } from "vasest";
+import go fmt from "fmt";
+import go reflect from "reflect";
+
+class PanickingSource implements MockCallSource<int> {
+  constructor() {}
+  public function calls(): int[] { reflect.ValueOf(42).Index(0); return []; }
+}
+
+function main(): void {
+  const suite = new Suite("mock source native panic");
+  suite.afterEach((): void => { fmt.Println("mock-predicate-source-afterEach"); });
+  suite.afterAll((): void => { fmt.Println("mock-predicate-source-afterAll"); });
+  suite.testWithContext("native source panic", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("mock-predicate-source-cleanup"); });
+    expectMock<int>(new PanickingSource()).not.toHaveBeenLastCalledSatisfying((value: int): boolean => { return true; });
+  });
+  suite.test("later case", (): void => { fmt.Println("unreachable-mock-predicate-source-later"); });
+  suite.runAndExit();
+}

@@ -1,0 +1,5 @@
+import { expectSlice, SliceExpectation, NegatedSliceExpectation } from "vasest";
+function main(): void {
+  const values: int64[] = [int64(42)];
+  expectSlice<int64>(values).not.toContainInOrder([int32(42)]);
+}

@@ -1,0 +1,5 @@
+import { SliceExpectation, expectSlice } from "vasest";
+type UserID = distinct int64;
+function main(): void {
+  const values: UserID[] = [UserID(42)]; new SliceExpectation<UserID>(values).toSatisfyAll((value: int64): boolean => { return true; });
+}

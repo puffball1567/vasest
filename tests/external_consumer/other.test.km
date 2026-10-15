@@ -1,0 +1,9 @@
+import { Suite, expectEqual } from "vasest";
+
+function main(): void {
+  const suite = new Suite("other file");
+  suite.test("unrelated test", (): void => {
+    expectEqual(2 + 2, 4);
+  });
+  suite.runAndExit();
+}

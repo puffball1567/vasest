@@ -1,0 +1,18 @@
+import { Suite, expectThrows, expectThrowsMessage, expectTrue, runSuiteAndExit } from "vasest";
+import go errors from "errors";
+
+function main(): void {
+  runSuiteAndExit("throw failures", (suite: Suite): void => {
+    suite.test("missing exception", (): void => {
+      expectThrows((): void => {});
+    });
+    suite.test("message mismatch", (): void => {
+      expectThrowsMessage((): void => {
+        throw errors.New("actual message");
+      }, "wanted message");
+    });
+    suite.test("continues after failure", (): void => {
+      expectTrue(true);
+    });
+  });
+}

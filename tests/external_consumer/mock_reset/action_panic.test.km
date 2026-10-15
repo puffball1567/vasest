@@ -1,0 +1,17 @@
+import { Suite, TestContext, MockAction } from "vasest";
+import go fmt from "fmt";
+import go reflect from "reflect";
+
+function main(): void {
+  const suite = new Suite("reset action panic");
+  suite.afterEach((): void => { fmt.Println("reset-action-panic-afterEach"); });
+  suite.afterAll((): void => { fmt.Println("reset-action-panic-afterAll"); });
+  suite.testWithContext("native replacement panic", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("reset-action-panic-cleanup"); });
+    const mock = new MockAction<int>((value: int): void => {});
+    mock.reset((value: int): void => { reflect.ValueOf(value).Index(0); });
+    mock.invoke(42);
+  });
+  suite.test("later", (): void => { fmt.Println("unreachable-reset-panic-later"); });
+  suite.runAndExit();
+}

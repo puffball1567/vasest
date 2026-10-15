@@ -1,0 +1,83 @@
+import { Suite, MockFn, MockAction, MockExpectation, MockCallSource, expectMock, expect, expectFunction } from "vasest";
+import go errors from "errors";
+
+type UserID = distinct int64;
+
+class Spy implements MockCallSource<UserID> {
+  public reads: int;
+  constructor() { this.reads = 0; }
+  public function calls(): UserID[] { this.reads++; return [UserID(42)]; }
+}
+
+function main(): void {
+  const suite = new Suite("typed mock call matchers");
+  suite.test("explicit types and live function history", (): void => {
+    let invoked = 0;
+    const mock = new MockFn<UserID, string>((value: UserID): string => { invoked++; return "default"; });
+    mock.returnValueOnce("queued");
+    const matcher: MockExpectation<UserID> = expectMock<UserID>(mock);
+    matcher.not.toHaveBeenCalled();
+    matcher.toHaveBeenCalledTimes(0);
+    matcher.not.toHaveBeenCalledWith(UserID(42));
+    matcher.not.toHaveBeenNthCalledWith(1, UserID(42));
+    matcher.not.toHaveBeenLastCalledWith(UserID(42));
+    expect(invoked).toEqual(0);
+    expect(mock.invoke(UserID(42))).toEqual("queued");
+    matcher.toHaveBeenCalled();
+    matcher.toHaveBeenCalledTimes(1);
+    matcher.toHaveBeenCalledWith(UserID(42));
+    matcher.toHaveBeenNthCalledWith(1, UserID(42));
+    matcher.toHaveBeenLastCalledWith(UserID(42));
+    mock.invoke(UserID(43));
+    matcher.not.toHaveBeenCalledTimes(1);
+    matcher.not.toHaveBeenCalledWith(UserID(44));
+    matcher.not.toHaveBeenNthCalledWith(1, UserID(43));
+    matcher.not.toHaveBeenNthCalledWith(3, UserID(42));
+    matcher.not.toHaveBeenLastCalledWith(UserID(42));
+    matcher.toHaveBeenLastCalledWith(UserID(43));
+    new MockExpectation<UserID>(mock).toHaveBeenCalledTimes(2);
+    expectMock(mock).toHaveBeenCalledWith(UserID(42));
+    mock.clearCalls();
+    matcher.not.toHaveBeenCalled();
+    matcher.toHaveBeenCalledTimes(0);
+    expect(invoked).toEqual(1);
+  });
+  suite.test("typed action and native nested arguments", (): void => {
+    const mock = new MockAction<int[]>((value: int[]): void => {});
+    mock.invoke([1, 2]);
+    const matcher = expectMock<int[]>(mock);
+    matcher.toHaveBeenCalledWith([1, 2]);
+    matcher.toHaveBeenNthCalledWith(1, [1, 2]);
+    matcher.toHaveBeenLastCalledWith([1, 2]);
+    matcher.not.toHaveBeenCalledWith([1, 3]);
+    new MockExpectation<int[]>(mock).not.toHaveBeenCalledTimes(0);
+    expectMock(mock).toHaveBeenCalled();
+  });
+  suite.test("nil and empty arguments stay distinct", (): void => {
+    const mock = new MockAction<int[]>((value: int[]): void => {});
+    const empty: int[] = [];
+    mock.invoke(nil);
+    expectMock<int[]>(mock).toHaveBeenCalledWith(nil);
+    expectMock<int[]>(mock).not.toHaveBeenCalledWith(empty);
+    expectMock<int[]>(mock).not.toHaveBeenNthCalledWith(1, empty);
+    expectMock<int[]>(mock).not.toHaveBeenLastCalledWith(empty);
+  });
+  suite.test("throws still count as calls", (): void => {
+    const mock = new MockAction<UserID>((value: UserID): void => { throw errors.New("mock failed"); });
+    expectFunction((): void => { mock.invoke(UserID(42)); }).toThrowMessage("mock failed");
+    expectMock<UserID>(mock).toHaveBeenCalledTimes(1);
+    expectMock<UserID>(mock).toHaveBeenNthCalledWith(1, UserID(42));
+    expectMock<UserID>(mock).toHaveBeenLastCalledWith(UserID(42));
+  });
+  suite.test("custom typed sources read once per matcher", (): void => {
+    const spy = new Spy();
+    const source: MockCallSource<UserID> = spy;
+    expectMock<UserID>(source).toHaveBeenCalledWith(UserID(42));
+    expect(spy.reads).toEqual(1);
+    expectMock(spy).toHaveBeenLastCalledWith(UserID(42));
+    expect(spy.reads).toEqual(2);
+    new MockExpectation<UserID>(source).not.toHaveBeenNthCalledWith(2, UserID(42));
+    expect(spy.reads).toEqual(3);
+  });
+  suite.runAndExit();
+}

@@ -1,0 +1,2 @@
+import { expectMock } from "vasest";
+function main(): void { expectMock<int>(42).toHaveBeenCalled(); }

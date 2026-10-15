@@ -1,0 +1,60 @@
+import { Suite, FunctionExpectation, expect, expectErrorValue, expectFunction } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+import go os from "os";
+
+class CodedError implements error {
+  public code: int;
+
+  constructor(code: int) {
+    this.code = code;
+  }
+
+  public function Error(): string {
+    return fmt.Sprintf("code %d", this.code);
+  }
+}
+
+function main(): void {
+  const suite = new Suite("typed function matchers");
+  suite.test("each matcher invokes the function once", (): void => {
+    const cause = errors.New("金木犀 unavailable");
+    const wrapped = errors.Join(errors.New("other"), fmt.Errorf("load: %w", cause));
+    let calls = 0;
+    const body: () => void = (): void => { calls++; throw wrapped; };
+    const matcher = new FunctionExpectation(body);
+    expect(calls).toEqual(0);
+    expect<error>(matcher.toThrow()).toBe(wrapped);
+    matcher.toThrowMessage("木");
+    matcher.toThrowCause(cause);
+    let found: error = nil;
+    matcher.toThrowType<error>(&found);
+    expectErrorValue(found).toMatchCause(cause);
+    matcher.not.toThrowMessage("missing");
+    matcher.not.toThrowCause(errors.New("same message"));
+    matcher.not.toThrowType<*os.PathError>();
+    expect(calls).toEqual(7);
+  });
+  suite.test("native error extraction with explicit type", (): void => {
+    const original = os.PathError { Op: "open", Path: "missing", Err: os.ErrNotExist };
+    let found: *os.PathError = nil;
+    expectFunction((): void => { throw fmt.Errorf("load: %w", &original); }).toThrowType<*os.PathError>(&found);
+    expect(found.Path).toEqual("missing");
+  });
+  suite.test("application error extraction with inference", (): void => {
+    const original = new CodedError(42);
+    let found: CodedError = nil;
+    expectFunction((): void => { throw fmt.Errorf("load: %w", original); }).toThrowType(&found);
+    expect(found).toBe(original);
+  });
+  suite.test("non-throwing functions pass negative matchers", (): void => {
+    let calls = 0;
+    const matcher = expectFunction((): void => { calls++; });
+    matcher.not.toThrow();
+    matcher.not.toThrowMessage("missing");
+    matcher.not.toThrowCause(os.ErrNotExist);
+    matcher.not.toThrowType<*os.PathError>();
+    expect(calls).toEqual(4);
+  });
+  suite.runAndExit();
+}

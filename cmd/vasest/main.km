@@ -1,0 +1,2706 @@
+import go context from "context";
+import go bytes from "bytes";
+import go sha256 from "crypto/sha256";
+import go buildinfo from "debug/buildinfo";
+import go json from "encoding/json";
+import go errors from "errors";
+import go fmt from "fmt";
+import go io from "io";
+import go rand from "math/rand";
+import go os from "os";
+import go signal from "os/signal";
+import go exec from "os/exec";
+import go filepath from "path/filepath";
+import go pathmatch from "path";
+import go reflect from "reflect";
+import go strings from "strings";
+import go strconv from "strconv";
+import go sync from "sync";
+import go syscall from "syscall";
+import go time from "time";
+import go utf8 from "unicode/utf8";
+
+struct RunnerConfig {
+  public version: int;
+  public testPath: *string;
+  public jobs: *int;
+  public repeat: *int;
+  public timeout: *string;
+  public reporter: *string;
+  public filter: *string;
+  public bail: *boolean;
+  public failOnTodo: *boolean;
+  public include: string[];
+  public exclude: string[];
+}
+
+struct RunnerInput {
+  args: string[];
+  controls: string[];
+  config: RunnerConfig;
+  configPath: string;
+  path: string;
+  listOnly: boolean;
+}
+
+function emptyConfig(): RunnerConfig {
+  return RunnerConfig { version: 1, testPath: nil, jobs: nil, repeat: nil, timeout: nil, reporter: nil, filter: nil, bail: nil, failOnTodo: nil, include: [], exclude: [] };
+}
+
+function validateFilePattern(pattern: string): Result<string> {
+  let normalized = pattern;
+  while (strings.HasPrefix(normalized, "./")) {
+    normalized = strings.TrimPrefix(normalized, "./");
+  }
+  if (normalized == "" || filepath.IsAbs(normalized) || strings.ContainsAny(normalized, "\r\n\x00")) {
+    return fail(errors.New("file patterns must be non-empty relative paths"));
+  }
+  for (const component of strings.Split(normalized, "/")) {
+    if (component == "" || component == "." || component == "..") {
+      return fail(errors.New("file patterns must not contain empty, dot, or parent path components"));
+    }
+    if (component == "**") {
+      continue;
+    }
+    if (strings.Contains(component, "**")) {
+      return fail(errors.New("** must be an entire path component"));
+    }
+    const [matched, patternError] = pathmatch.Match(component, "");
+    if (patternError != nil) {
+      return fail(patternError);
+    }
+  }
+  return ok(normalized);
+}
+
+function matchesFilePattern(pattern: string, relative: string): Result<boolean> {
+  const names = strings.Split(relative, "/");
+  let previous: boolean[] = [true];
+  for (const name of names) {
+    previous = append(previous, false);
+  }
+  // Dynamic programming keeps repeated ** components from causing an
+  // exponential search through deeply nested paths.
+  for (const component of strings.Split(pattern, "/")) {
+    let current: boolean[] = [component == "**" && previous[0]];
+    for (let index = 1; index <= len(names); index++) {
+      if (component == "**") {
+        current = append(current, previous[index] || current[index - 1]);
+      } else {
+        const matched = pathmatch.Match(component, names[index - 1])?;
+        current = append(current, previous[index - 1] && matched);
+      }
+    }
+    previous = current;
+  }
+  return ok(previous[len(names)]);
+}
+
+function selectTestFiles(path: string, files: string[], includes: string[], excludes: string[]): Result<string[]> {
+  let included: string[] = [];
+  let excluded: string[] = [];
+  for (const pattern of includes) {
+    const normalized = validateFilePattern(pattern)?;
+    included = append(included, normalized);
+  }
+  for (const pattern of excludes) {
+    const normalized = validateFilePattern(pattern)?;
+    excluded = append(excluded, normalized);
+  }
+  const info = os.Stat(path)?;
+  let base = path;
+  if (!info.IsDir()) {
+    base = filepath.Dir(path);
+  }
+  const root = filepath.Abs(base)?;
+  let selected: string[] = [];
+  for (const file of files) {
+    const absolute = filepath.Abs(file)?;
+    const relative = filepath.Rel(root, absolute)?;
+    const name = filepath.ToSlash(relative);
+    let wanted = len(included) == 0;
+    for (const pattern of included) {
+      const matched = matchesFilePattern(pattern, name)?;
+      if (matched) {
+        wanted = true;
+        break;
+      }
+    }
+    if (!wanted) {
+      continue;
+    }
+    for (const pattern of excluded) {
+      const matched = matchesFilePattern(pattern, name)?;
+      if (matched) {
+        wanted = false;
+        break;
+      }
+    }
+    if (wanted) {
+      selected = append(selected, file);
+    }
+  }
+  return ok(selected);
+}
+
+// JSON syntax remains the decoder's responsibility. Check escapes before it can
+// replace an unpaired UTF-16 surrogate with a different, valid identifier.
+function hasUnpairedJSONSurrogate(text: string): boolean {
+  let inString = false;
+  for (let index = 0; index < len(text); index++) {
+    const character = text[index:index + 1];
+    if (character == "\"") {
+      inString = !inString;
+      continue;
+    }
+    if (!inString || character != "\\" || index + 1 >= len(text)) {
+      continue;
+    }
+    if (text[index + 1:index + 2] != "u") {
+      index++;
+      continue;
+    }
+    if (index + 6 > len(text)) {
+      return false;
+    }
+    const [unit, parseError] = strconv.ParseUint(text[index + 2:index + 6], 16, 16);
+    if (parseError != nil) {
+      return false;
+    }
+    if (unit >= 0xdc00 && unit <= 0xdfff) {
+      return true;
+    }
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      if (index + 12 > len(text) || text[index + 6:index + 8] != "\\u") {
+        return true;
+      }
+      const [low, lowError] = strconv.ParseUint(text[index + 8:index + 12], 16, 16);
+      if (lowError != nil || low < 0xdc00 || low > 0xdfff) {
+        return true;
+      }
+      index += 11;
+    } else {
+      index += 5;
+    }
+  }
+  return false;
+}
+
+struct JSONFieldScope {
+  object: boolean;
+  names: string[];
+  key: boolean;
+}
+
+// Token decoding preserves repeated keys and decodes escaped names. Fold names
+// as the native struct decoder does, while keeping separate object scopes.
+function duplicateJSONFieldError(text: string): error {
+  const decoder = json.NewDecoder(strings.NewReader(text));
+  decoder.UseNumber();
+  const delimiterType = reflect.TypeOf(json.Delim(0));
+  let scopes: JSONFieldScope[] = [];
+  while (true) {
+    const [token, tokenError] = decoder.Token();
+    if (errors.Is(tokenError, io.EOF)) {
+      return nil;
+    }
+    if (tokenError != nil) {
+      return tokenError;
+    }
+    if (reflect.TypeOf(token) == delimiterType) {
+      const delimiter = token as! json.Delim;
+      if (delimiter == json.Delim(123) || delimiter == json.Delim(91)) {
+        if (len(scopes) > 0) {
+          scopes[len(scopes) - 1].key = true;
+        }
+        scopes = append(scopes, JSONFieldScope { object: delimiter == json.Delim(123), names: [], key: true });
+      } else {
+        scopes = scopes[0:len(scopes) - 1];
+      }
+      continue;
+    }
+    if (len(scopes) == 0 || !scopes[len(scopes) - 1].object) {
+      continue;
+    }
+    let scope = scopes[len(scopes) - 1];
+    if (scope.key) {
+      const name = token as! string;
+      for (const seen of scope.names) {
+        if (strings.EqualFold(seen, name)) {
+          return fmt.Errorf("duplicate JSON field %q", name);
+        }
+      }
+      scope.names = append(scope.names, name);
+    }
+    scope.key = !scope.key;
+    scopes[len(scopes) - 1] = scope;
+  }
+  return nil;
+}
+
+function readRunnerConfig(path: string): Result<RunnerConfig> {
+  const data = os.ReadFile(path)?;
+  if (!utf8.Valid(data)) {
+    return fail(errors.New("configuration must be valid UTF-8"));
+  }
+  if (!json.Valid(data)) {
+    return fail(errors.New("invalid configuration JSON"));
+  }
+  if (hasUnpairedJSONSurrogate(string(data))) {
+    return fail(errors.New("configuration must use paired Unicode surrogate escapes"));
+  }
+  const fieldError = duplicateJSONFieldError(string(data));
+  if (fieldError != nil) {
+    return fail(fieldError);
+  }
+  const target = reflect.New(reflect.TypeOf(emptyConfig()));
+  const decoder = json.NewDecoder(bytes.NewReader(data));
+  decoder.DisallowUnknownFields();
+  const decodeError = decoder.Decode(target.Interface());
+  if (decodeError != nil) {
+    return fail(decodeError);
+  }
+  const config = target.Elem().Interface() as! RunnerConfig;
+  if (config.version != 1) {
+    return fail(errors.New("configuration requires version 1"));
+  }
+  if (config.testPath != nil && (strings.TrimSpace(*config.testPath) == "" || strings.ContainsAny(*config.testPath, "\r\n\x00"))) {
+    return fail(errors.New("configuration testPath must be a non-empty path"));
+  }
+  if (config.jobs != nil && *config.jobs < 1) {
+    return fail(errors.New("configuration jobs must be a positive integer"));
+  }
+  if (config.repeat != nil && *config.repeat < 1) {
+    return fail(errors.New("configuration repeat must be a positive integer"));
+  }
+  if (config.timeout != nil) {
+    const [duration, parseError] = time.ParseDuration(*config.timeout);
+    if (parseError != nil || duration <= 0) {
+      return fail(errors.New("configuration timeout must be a positive duration"));
+    }
+  }
+  if (config.reporter != nil && *config.reporter != "text" && *config.reporter != "json" && *config.reporter != "junit") {
+    return fail(errors.New("configuration reporter must be text, json, or junit"));
+  }
+  if (config.filter != nil && *config.filter == "") {
+    return fail(errors.New("configuration filter must be non-empty"));
+  }
+  for (const pattern of config.include) {
+    const [normalized, patternError] = validateFilePattern(pattern);
+    if (patternError != nil) {
+      return fail(fmt.Errorf("invalid include pattern %q: %w", pattern, patternError));
+    }
+  }
+  for (const pattern of config.exclude) {
+    const [normalized, patternError] = validateFilePattern(pattern);
+    if (patternError != nil) {
+      return fail(fmt.Errorf("invalid exclude pattern %q: %w", pattern, patternError));
+    }
+  }
+  return ok(config);
+}
+
+function optionTakesValue(argument: string): boolean {
+  return argument == "--repeat" || argument == "--include" || argument == "--exclude" || argument == "--watch-interval" || argument == "--coverage" || argument == "--artifacts" || argument == "--save-failures" || argument == "--rerun-failed" || argument == "--filter" || argument == "--timeout" || argument == "--shuffle" || argument == "--shard" || argument == "--jobs" || argument == "--reporter";
+}
+
+function prepareRunnerInput(args: string[]): Result<RunnerInput> {
+  let input = RunnerInput { args: [], controls: [], config: emptyConfig(), configPath: "", path: "tests", listOnly: false };
+  let explicitConfig = "";
+  let disabled = false;
+  let awaitingConfig = false;
+  let awaitingValue = false;
+  let commandPath = "";
+  let informational = false;
+  for (const argument of args) {
+    if (awaitingConfig) {
+      if (argument == "" || strings.HasPrefix(argument, "-") || !strings.HasSuffix(argument, ".json")) {
+        return fail(errors.New("--config requires a .json file path"));
+      }
+      explicitConfig = argument;
+      awaitingConfig = false;
+      continue;
+    }
+    if (awaitingValue) {
+      input.args = append(input.args, argument);
+      awaitingValue = false;
+      continue;
+    }
+    if (argument == "--config") {
+      awaitingConfig = true;
+      continue;
+    }
+    if (argument == "--no-config") {
+      disabled = true;
+      continue;
+    }
+    if (argument == "--help" || argument == "-h" || argument == "--version") {
+      informational = true;
+    }
+    if (argument == "--list") {
+      input.listOnly = true;
+    }
+    if (!strings.HasPrefix(argument, "-")) {
+      commandPath = argument;
+    }
+    input.args = append(input.args, argument);
+    awaitingValue = optionTakesValue(argument);
+  }
+  if (awaitingConfig) {
+    return fail(errors.New("--config requires a .json file path"));
+  }
+  if (disabled && explicitConfig != "") {
+    return fail(errors.New("--config cannot be combined with --no-config"));
+  }
+  if (disabled) {
+    input.controls = ["--no-config"];
+  } else {
+    let path = explicitConfig;
+    if (path == "") {
+      path = "vasest.config.json";
+    }
+    const absolute = filepath.Abs(path)?;
+    input.configPath = absolute;
+    if (explicitConfig != "") {
+      input.controls = ["--config", input.configPath];
+    }
+    if (!informational) {
+      const [config, configError] = readRunnerConfig(input.configPath);
+      if (configError != nil) {
+        if (explicitConfig != "" || !os.IsNotExist(configError)) {
+          return fail(fmt.Errorf("%s: %w", path, configError));
+        }
+      } else {
+        input.config = config;
+      }
+    }
+  }
+  if (input.config.testPath != nil) {
+    input.path = *input.config.testPath;
+    if (!filepath.IsAbs(input.path)) {
+      input.path = filepath.Join(filepath.Dir(input.configPath), input.path);
+    }
+  }
+  if (commandPath != "") {
+    input.path = commandPath;
+  }
+  return ok(input);
+}
+
+struct FailedSuite {
+  public name: string;
+  public wholeSuite: boolean;
+  public cases: string[];
+}
+
+struct FailedFile {
+  public file: string;
+  public wholeFile: boolean;
+  public suites: FailedSuite[];
+}
+
+struct FailureHistory {
+  public version: int;
+  public files: FailedFile[];
+}
+
+struct RerunSelection {
+  public all: boolean;
+  public suites: FailedSuite[];
+}
+
+function readFailureHistory(path: string): Result<FailureHistory> {
+  const data = os.ReadFile(path)?;
+  if (!utf8.Valid(data)) {
+    return fail(errors.New("failure history must be valid UTF-8"));
+  }
+  if (!json.Valid(data)) {
+    return fail(errors.New("invalid failure history JSON"));
+  }
+  if (hasUnpairedJSONSurrogate(string(data))) {
+    return fail(errors.New("failure history must use paired Unicode surrogate escapes"));
+  }
+  const fieldError = duplicateJSONFieldError(string(data));
+  if (fieldError != nil) {
+    return fail(fieldError);
+  }
+  const target = reflect.New(reflect.TypeOf(FailureHistory { version: 0, files: [] }));
+  const decoder = json.NewDecoder(bytes.NewReader(data));
+  decoder.DisallowUnknownFields();
+  const parseError = decoder.Decode(target.Interface());
+  if (parseError != nil) {
+    return fail(parseError);
+  }
+  const history = target.Elem().Interface() as! FailureHistory;
+  if (history.version != 1 || history.files == nil) {
+    return fail(errors.New("failure history requires version 1 and a files array"));
+  }
+  let seenFiles: string[] = [];
+  for (const entry of history.files) {
+    if (entry.file == "" || filepath.IsAbs(entry.file) || !strings.HasSuffix(entry.file, ".test.km") || strings.ContainsAny(entry.file, "\r\n\x00")) {
+      return fail(errors.New("failure history requires relative *.test.km file paths"));
+    }
+    const resolved = filepath.Abs(filepath.Join(filepath.Dir(path), entry.file))?;
+    for (const seen of seenFiles) {
+      if (seen == resolved) {
+        return fail(errors.New("duplicate failure history file"));
+      }
+    }
+    seenFiles = append(seenFiles, resolved);
+    if ((!entry.wholeFile && len(entry.suites) == 0) || (entry.wholeFile && len(entry.suites) != 0)) {
+      return fail(errors.New("failure history requires either a whole file or selected suites"));
+    }
+    let seenSuites: string[] = [];
+    for (const suite of entry.suites) {
+      if (strings.TrimSpace(suite.name) == "" || (!suite.wholeSuite && len(suite.cases) == 0) || (suite.wholeSuite && len(suite.cases) != 0)) {
+        return fail(errors.New("invalid failure history suite selection"));
+      }
+      for (const seen of seenSuites) {
+        if (seen == suite.name) {
+          return fail(errors.New("duplicate failure history suite"));
+        }
+      }
+      seenSuites = append(seenSuites, suite.name);
+      for (const name of suite.cases) {
+        if (strings.TrimSpace(name) == "") {
+          return fail(errors.New("empty failure history case name"));
+        }
+      }
+    }
+  }
+  return ok(history);
+}
+
+function rerunSelection(history: FailureHistory, historyPath: string, file: string): Result<string> {
+  const absolute = filepath.Abs(file)?;
+  for (const entry of history.files) {
+    const resolved = filepath.Abs(filepath.Join(filepath.Dir(historyPath), entry.file))?;
+    if (resolved == absolute) {
+      const data = json.Marshal(RerunSelection { all: entry.wholeFile, suites: entry.suites })?;
+      return ok(string(data));
+    }
+  }
+  return ok("");
+}
+
+function failedFile(file: string, execution: FileExecution): FailedFile {
+  let entry = FailedFile { file: file, wholeFile: false, suites: [] };
+  // Process failures and incomplete reports cannot identify every failed case.
+  if ((execution.runError != nil && !execution.expectedExit) || execution.fatalError != nil || (execution.reportFailure != "" && execution.reportFailure != "suite reported failed tests")) {
+    entry.wholeFile = true;
+    return entry;
+  }
+  let suiteCounts: Map<string, int> = makeMap[string, int]();
+  for (const reported of execution.suites) {
+    const name = reported.report.summary.suite;
+    suiteCounts[name] = suiteCounts[name] + 1;
+  }
+  for (const reported of execution.suites) {
+    const report = reported.report;
+    if (report.success) {
+      continue;
+    }
+    // Passing reports also make a failed suite's name ambiguous.
+    if (suiteCounts[report.summary.suite] > 1) {
+      entry.wholeFile = true;
+      entry.suites = [];
+      return entry;
+    }
+    let suite = FailedSuite { name: report.summary.suite, wholeSuite: false, cases: [] };
+    for (const result of report.summary.results) {
+      if (result.status == "fail" || (result.status == "todo" && report.summary.failOnTodo)) {
+        let sharedFailure = false;
+        for (const detail of result.failures) {
+          if (detail.phase == "beforeAll" || detail.phase == "afterAll" || ((result.name == "<afterAll>") && detail.phase == "cleanup")) {
+            sharedFailure = true;
+          }
+        }
+        if (sharedFailure) {
+          suite.wholeSuite = true;
+        } else {
+          suite.cases = append(suite.cases, result.name);
+        }
+      }
+    }
+    if (suite.wholeSuite || len(suite.cases) == 0) {
+      suite.wholeSuite = true;
+      suite.cases = [];
+    }
+    entry.suites = append(entry.suites, suite);
+  }
+  return entry;
+}
+
+function mergeFailure(entries: FailedFile[], incoming: FailedFile): FailedFile[] {
+  for (let index = 0; index < len(entries); index++) {
+    if (entries[index].file != incoming.file) {
+      continue;
+    }
+    let entry = entries[index];
+    if (entry.wholeFile || incoming.wholeFile) {
+      entry.wholeFile = true;
+      entry.suites = [];
+      entries[index] = entry;
+      return entries;
+    }
+    for (const added of incoming.suites) {
+      let found = false;
+      for (let suiteIndex = 0; suiteIndex < len(entry.suites); suiteIndex++) {
+        let suite = entry.suites[suiteIndex];
+        if (suite.name != added.name) {
+          continue;
+        }
+        found = true;
+        if (suite.wholeSuite || added.wholeSuite) {
+          suite.wholeSuite = true;
+          suite.cases = [];
+        } else {
+          for (const name of added.cases) {
+            let present = false;
+            for (const previous of suite.cases) {
+              if (previous == name) {
+                present = true;
+              }
+            }
+            if (!present) {
+              suite.cases = append(suite.cases, name);
+            }
+          }
+        }
+        entry.suites[suiteIndex] = suite;
+        break;
+      }
+      if (!found) {
+        entry.suites = append(entry.suites, added);
+      }
+    }
+    entries[index] = entry;
+    return entries;
+  }
+  return append(entries, incoming);
+}
+
+function repeatFileName(file: string, index: int, count: int): string {
+  if (count == 1) {
+    return file;
+  }
+  return fmt.Sprintf("%s (repeat %d/%d)", file, index, count);
+}
+
+function saveFailureHistory(path: string, entries: FailedFile[]): error {
+  const [absolute, absoluteError] = filepath.Abs(path);
+  if (absoluteError != nil) {
+    return absoluteError;
+  }
+  let files: FailedFile[] = [];
+  for (const entry of entries) {
+    const [source, sourceError] = filepath.Abs(entry.file);
+    if (sourceError != nil) {
+      return sourceError;
+    }
+    const [relative, relativeError] = filepath.Rel(filepath.Dir(absolute), source);
+    if (relativeError != nil) {
+      return relativeError;
+    }
+    if (!utf8.ValidString(relative)) {
+      return errors.New("failure history file paths must be valid UTF-8");
+    }
+    files = append(files, FailedFile { file: relative, wholeFile: entry.wholeFile, suites: entry.suites });
+  }
+  let history = FailureHistory { version: 1, files: [] };
+  for (const file of files) {
+    history.files = append(history.files, file);
+  }
+  const [data, encodeError] = json.MarshalIndent(history, "", "  ");
+  if (encodeError != nil) {
+    return encodeError;
+  }
+  const [temporary, createError] = os.CreateTemp(filepath.Dir(absolute), ".vasest-failures-*");
+  if (createError != nil) {
+    return createError;
+  }
+  defer os.Remove(temporary.Name());
+  const [written, writeError] = temporary.Write(data);
+  const closeError = temporary.Close();
+  if (writeError != nil) {
+    return writeError;
+  }
+  if (closeError != nil) {
+    return closeError;
+  }
+  return os.Rename(temporary.Name(), absolute);
+}
+
+struct LocationReport {
+  public file: string;
+  public line: int;
+  public source: string;
+}
+
+struct FailureReport {
+  public phase: string;
+  public message: string;
+  public location: LocationReport;
+}
+
+struct CaseReport {
+  public name: string;
+  public passed: boolean;
+  public message: string;
+  public status: string;
+  public durationNs: int64;
+  public failures: FailureReport[];
+}
+
+struct SummaryReport {
+  public suite: string;
+  public failOnTodo: boolean;
+  public passed: int;
+  public failed: int;
+  public skipped: int;
+  public todo: int;
+  public durationNs: int64;
+  public results: CaseReport[];
+}
+
+struct SuiteReport {
+  public success: boolean;
+  public summary: SummaryReport;
+}
+
+struct JUnitCase {
+  name: string;
+  classname: string;
+  status: string;
+  message: string;
+  durationNs: int64;
+  failures: FailureReport[];
+}
+
+struct JUnitFile {
+  path: string;
+  output: string;
+  durationNs: int64;
+  cases: JUnitCase[];
+}
+
+struct ReportedSuite {
+  raw: string;
+  report: SuiteReport;
+}
+
+struct FileExecution {
+  executed: boolean;
+  output: string;
+  durationNs: int64;
+  runError: error;
+  reportFailure: string;
+  fatalError: error;
+  suites: ReportedSuite[];
+  rawReport: string;
+  expectedExit: boolean;
+}
+
+struct SourceSnapshot {
+  public original: string;
+  public archived: string;
+  public importPath: string;
+  public sha256: string;
+}
+
+struct ArtifactFile {
+  public file: string;
+  public directory: string;
+  public output: string;
+  public report: string;
+  public executed: boolean;
+  public status: string;
+  public failure: string;
+  public durationNs: int64;
+  public sourceAvailable: boolean;
+  public source: SourceSnapshot;
+  public profile: string;
+  public html: string;
+  public error: string;
+}
+
+struct ArtifactManifest {
+  public version: int;
+  public coverage: string;
+  public files: ArtifactFile[];
+  public repeatIndex: int;
+  public repeatCount: int;
+}
+
+function emptySourceSnapshot(): SourceSnapshot {
+  return SourceSnapshot { original: "", archived: "", importPath: "", sha256: "" };
+}
+
+class ArtifactRun {
+  public directory: string;
+  public repeatIndex: int;
+  public repeatCount: int;
+  private coverage: string;
+  private files: ArtifactFile[];
+
+  constructor(directory: string, files: string[], coverage: string) {
+    this.directory = directory;
+    this.repeatIndex = 1;
+    this.repeatCount = 1;
+    this.coverage = coverage;
+    this.files = [];
+    for (let index = 0; index < len(files); index++) {
+      const data = filepath.Join(directory, fmt.Sprintf("file-%04d", index + 1));
+      this.files = append(this.files, ArtifactFile { file: files[index], directory: data, output: filepath.Join(data, "output.txt"), report: filepath.Join(data, "suites.jsonl"), executed: false, status: "not-run", failure: "", durationNs: 0, sourceAvailable: false, source: emptySourceSnapshot(), profile: "", html: "", error: "" });
+    }
+  }
+
+  public function fileDirectory(file: string): string {
+    for (const entry of this.files) {
+      if (entry.file == file) {
+        return entry.directory;
+      }
+    }
+    return "";
+  }
+
+  public function collect(file: string, execution: FileExecution, coverageProfile: string): error {
+    for (let index = 0; index < len(this.files); index++) {
+      if (this.files[index].file != file) {
+        continue;
+      }
+      this.files[index].executed = true;
+      // Persist the execution outcome before writing artifacts, so a later
+      // archival failure cannot erase the original process/report diagnosis.
+      const executionError = fileExecutionError(execution);
+      this.files[index].status = "pass";
+      if (executionError != nil || execution.reportFailure != "") {
+        this.files[index].status = "fail";
+      }
+      this.files[index].failure = fileFailureMessage(executionError, execution.reportFailure);
+      this.files[index].durationNs = execution.durationNs;
+      const entry = this.files[index];
+      const outputError = os.WriteFile(entry.output, bytes.NewBufferString(execution.output).Bytes(), 0o644);
+      if (outputError != nil) {
+        this.files[index].error = outputError.Error();
+        return outputError;
+      }
+      const reportError = os.WriteFile(entry.report, bytes.NewBufferString(execution.rawReport).Bytes(), 0o644);
+      if (reportError != nil) {
+        this.files[index].error = reportError.Error();
+        return reportError;
+      }
+      const [data, readError] = os.ReadFile(filepath.Join(entry.directory, "source.json"));
+      if (readError != nil) {
+        if (execution.runError != nil || execution.fatalError != nil) {
+          this.files[index].error = "build did not produce a source archive";
+          return nil;
+        }
+        this.files[index].error = readError.Error();
+        return readError;
+      }
+      const target = reflect.New(reflect.TypeOf(emptySourceSnapshot()));
+      const decodeError = json.Unmarshal(data, target.Interface());
+      if (decodeError != nil) {
+        this.files[index].error = decodeError.Error();
+        return decodeError;
+      }
+      const snapshot = target.Elem().Interface() as! SourceSnapshot;
+      const expectedSource = filepath.Join(entry.directory, ".source", "generated.go");
+      const [sourceData, sourceError] = os.ReadFile(expectedSource);
+      const digest = sha256.Sum256(sourceData);
+      if (sourceError != nil || snapshot.archived != expectedSource || snapshot.original == "" || snapshot.importPath == "" || snapshot.sha256 != fmt.Sprintf("%x", digest)) {
+        this.files[index].error = "source archive is missing, incomplete, or changed";
+        return errors.New(this.files[index].error);
+      }
+      this.files[index].source = snapshot;
+      this.files[index].sourceAvailable = true;
+      if (coverageProfile != "") {
+        const profile = filepath.Join(entry.directory, "coverage.out");
+        const html = filepath.Join(entry.directory, "coverage.html");
+        const coverageError = archiveCoverage(coverageProfile, profile, html, snapshot);
+        if (coverageError != nil) {
+          this.files[index].error = coverageError.Error();
+          return coverageError;
+        }
+        this.files[index].profile = profile;
+        this.files[index].html = html;
+      }
+      return nil;
+    }
+    return errors.New("artifact file was not selected");
+  }
+
+  public function finish(): error {
+    let manifest = ArtifactManifest { version: 1, coverage: this.coverage, files: [], repeatIndex: this.repeatIndex, repeatCount: this.repeatCount };
+    for (const entry of this.files) {
+      manifest.files = append(manifest.files, entry);
+    }
+    const [data, encodeError] = json.MarshalIndent(manifest, "", "  ");
+    if (encodeError != nil) {
+      return encodeError;
+    }
+    return os.WriteFile(filepath.Join(this.directory, "manifest.json"), data, 0o644);
+  }
+}
+
+function prepareArtifacts(directory: string, files: string[], coverage: string): Result<ArtifactRun> {
+  const absolute = filepath.Abs(directory)?;
+  const createError = os.MkdirAll(absolute, 0o755);
+  if (createError != nil) {
+    return fail(createError);
+  }
+  const runDirectory = os.MkdirTemp(absolute, "run-*")?;
+  const artifacts = new ArtifactRun(runDirectory, files, coverage);
+  for (const file of files) {
+    const dataError = os.Mkdir(artifacts.fileDirectory(file), 0o755);
+    if (dataError != nil) {
+      return fail(dataError);
+    }
+  }
+  return ok(artifacts);
+}
+
+function generatedSourceDirectory(file: string): Result<string> {
+  const absolute = filepath.Abs(file)?;
+  const start = filepath.Dir(absolute);
+  let directory = start;
+  while (true) {
+    const [manifest, manifestError] = os.Stat(filepath.Join(directory, "kinmokusei.toml"));
+    const [module, moduleError] = os.Stat(filepath.Join(directory, "go.mod"));
+    if (manifestError == nil || moduleError == nil) {
+      return ok(filepath.Join(directory, ".kinmokusei", "gen"));
+    }
+    const parent = filepath.Dir(directory);
+    if (parent == directory) {
+      break;
+    }
+    directory = parent;
+  }
+  const working = os.Getwd()?;
+  const relative = filepath.Rel(working, absolute)?;
+  if (relative != ".." && !strings.HasPrefix(relative, ".." + string(os.PathSeparator))) {
+    return ok(filepath.Join(working, ".kinmokusei", "gen"));
+  }
+  return ok(filepath.Join(start, ".kinmokusei", "gen"));
+}
+
+function archiveGeneratedSource(file: string, executable: string, directory: string): error {
+  const [generated, rootError] = generatedSourceDirectory(file);
+  if (rootError != nil) {
+    return rootError;
+  }
+  const original = filepath.Join(generated, "generated.go");
+  const [source, readError] = os.ReadFile(original);
+  if (readError != nil) {
+    return readError;
+  }
+  const [info, infoError] = buildinfo.ReadFile(executable);
+  if (infoError != nil) {
+    return infoError;
+  }
+  const sourceDirectory = filepath.Join(directory, ".source");
+  const createError = os.Mkdir(sourceDirectory, 0o755);
+  if (createError != nil) {
+    return createError;
+  }
+  const archived = filepath.Join(sourceDirectory, "generated.go");
+  const writeError = os.WriteFile(archived, source, 0o644);
+  if (writeError != nil) {
+    return writeError;
+  }
+  const digest = sha256.Sum256(source);
+  const snapshot = SourceSnapshot { original: original, archived: archived, importPath: info.Path, sha256: fmt.Sprintf("%x", digest) };
+  const [data, encodeError] = json.MarshalIndent(snapshot, "", "  ");
+  if (encodeError != nil) {
+    return encodeError;
+  }
+  return os.WriteFile(filepath.Join(directory, "source.json"), data, 0o644);
+}
+
+function archiveCoverage(original: string, profile: string, html: string, snapshot: SourceSnapshot): error {
+  const [data, readError] = os.ReadFile(original);
+  if (readError != nil) {
+    return readError;
+  }
+  let lines = strings.Split(string(data), "\n");
+  const prefix = snapshot.importPath + "/generated.go:";
+  let remapped = false;
+  for (let index = 1; index < len(lines); index++) {
+    if (strings.HasPrefix(lines[index], prefix)) {
+      lines[index] = snapshot.archived + ":" + strings.TrimPrefix(lines[index], prefix);
+      remapped = true;
+    }
+  }
+  if (!remapped) {
+    return errors.New("coverage profile does not reference the archived generated package");
+  }
+  const writeError = os.WriteFile(profile, bytes.NewBufferString(strings.Join(lines, "\n")).Bytes(), 0o644);
+  if (writeError != nil) {
+    return writeError;
+  }
+  const command = exec.Command("go", "tool", "cover", "-html=" + profile, "-o", html);
+  const [output, convertError] = command.CombinedOutput();
+  if (convertError != nil) {
+    return fmt.Errorf("coverage HTML failed: %w: %s", convertError, strings.TrimSpace(string(output)));
+  }
+  return nil;
+}
+
+struct CoverageFile {
+  public file: string;
+  public data: string;
+  public profile: string;
+  public executed: boolean;
+  public available: boolean;
+  public error: string;
+}
+
+struct CoverageManifest {
+  public version: int;
+  public source: string;
+  public files: CoverageFile[];
+  public repeatIndex: int;
+  public repeatCount: int;
+}
+
+class CoverageRun {
+  public directory: string;
+  public repeatIndex: int;
+  public repeatCount: int;
+  private files: CoverageFile[];
+
+  constructor(directory: string, files: string[]) {
+    this.directory = directory;
+    this.repeatIndex = 1;
+    this.repeatCount = 1;
+    this.files = [];
+    for (let index = 0; index < len(files); index++) {
+      const data = filepath.Join(directory, fmt.Sprintf("file-%04d", index + 1));
+      this.files = append(this.files, CoverageFile { file: files[index], data: data, profile: filepath.Join(data, "coverage.out"), executed: false, available: false, error: "" });
+    }
+  }
+
+  public function dataDirectory(file: string): string {
+    for (const entry of this.files) {
+      if (entry.file == file) {
+        return entry.data;
+      }
+    }
+    return "";
+  }
+
+  public function profilePath(file: string): string {
+    for (const entry of this.files) {
+      if (entry.file == file && entry.available) {
+        return entry.profile;
+      }
+    }
+    return "";
+  }
+
+  public function collect(file: string, runError: error): error {
+    for (let index = 0; index < len(this.files); index++) {
+      if (this.files[index].file != file) {
+        continue;
+      }
+      this.files[index].executed = true;
+      const entry = this.files[index];
+      const [items, readError] = os.ReadDir(entry.data);
+      if (readError != nil) {
+        this.files[index].error = readError.Error();
+        return readError;
+      }
+      let counters = false;
+      for (const item of items) {
+        if (strings.HasPrefix(item.Name(), "covcounters.")) {
+          counters = true;
+        }
+      }
+      if (!counters) {
+        this.files[index].error = "process did not emit coverage counters";
+        if (runError == nil) {
+          return errors.New(this.files[index].error);
+        }
+        return nil;
+      }
+      const command = exec.Command("go", "tool", "covdata", "textfmt", "-i=" + entry.data, "-o=" + entry.profile);
+      const [output, convertError] = command.CombinedOutput();
+      let conversionMessage = strings.TrimSpace(string(output));
+      if (convertError != nil) {
+        conversionMessage = convertError.Error() + ": " + conversionMessage;
+      }
+      if (conversionMessage != "") {
+        this.files[index].error = "coverage conversion failed: " + conversionMessage;
+        return errors.New(this.files[index].error);
+      }
+      const [profileData, profileError] = os.ReadFile(entry.profile);
+      if (profileError != nil) {
+        this.files[index].error = profileError.Error();
+        return profileError;
+      }
+      const profileText = string(profileData);
+      if (!strings.HasPrefix(profileText, "mode: atomic\n") || len(strings.Split(strings.TrimSpace(profileText), "\n")) < 2) {
+        this.files[index].error = "coverage conversion produced no atomic statement data";
+        return errors.New(this.files[index].error);
+      }
+      this.files[index].available = true;
+      return nil;
+    }
+    return errors.New("coverage file was not selected");
+  }
+
+  public function finish(): error {
+    let manifest = CoverageManifest { version: 1, source: "generated-go", files: [], repeatIndex: this.repeatIndex, repeatCount: this.repeatCount };
+    for (const entry of this.files) {
+      manifest.files = append(manifest.files, entry);
+    }
+    const [data, encodeError] = json.MarshalIndent(manifest, "", "  ");
+    if (encodeError != nil) {
+      return encodeError;
+    }
+    return os.WriteFile(filepath.Join(this.directory, "manifest.json"), data, 0o644);
+  }
+}
+
+function prepareCoverage(directory: string, files: string[]): Result<CoverageRun> {
+  const absolute = filepath.Abs(directory)?;
+  const createError = os.MkdirAll(absolute, 0o755);
+  if (createError != nil) {
+    return fail(createError);
+  }
+  const runDirectory = os.MkdirTemp(absolute, "run-*")?;
+  const coverage = new CoverageRun(runDirectory, files);
+  for (const file of files) {
+    const dataError = os.Mkdir(coverage.dataDirectory(file), 0o755);
+    if (dataError != nil) {
+      return fail(dataError);
+    }
+  }
+  return ok(coverage);
+}
+
+class FileScheduler {
+  private files: string[];
+  private execute: (file: string) => FileExecution;
+  private bail: boolean;
+  private next: int;
+  private stopped: boolean;
+  private results: FileExecution[];
+  private mutex: sync.Mutex;
+  private workers: sync.WaitGroup;
+
+  constructor(files: string[], execute: (file: string) => FileExecution, bail: boolean) {
+    this.files = files;
+    this.execute = execute;
+    this.bail = bail;
+    this.next = 0;
+    this.stopped = false;
+    this.results = [];
+    for (const file of files) {
+      this.results = append(this.results, FileExecution { executed: false, output: "", durationNs: 0, runError: nil, reportFailure: "", fatalError: nil, suites: [], rawReport: "", expectedExit: false });
+    }
+  }
+
+  public function run(jobs: int): FileExecution[] {
+    let count = jobs;
+    if (count > len(this.files)) {
+      count = len(this.files);
+    }
+    this.workers.Add(count);
+    for (let index = 0; index < count; index++) {
+      go this.work();
+    }
+    this.workers.Wait();
+    return this.results;
+  }
+
+  private function work(): void {
+    defer this.workers.Done();
+    while (true) {
+      this.mutex.Lock();
+      if (this.stopped || this.next >= len(this.files)) {
+        this.mutex.Unlock();
+        return;
+      }
+      const index = this.next;
+      this.next++;
+      this.mutex.Unlock();
+      const result = this.execute(this.files[index]);
+      this.mutex.Lock();
+      this.results[index] = result;
+      if (result.fatalError != nil || (this.bail && (result.runError != nil || result.reportFailure != ""))) {
+        this.stopped = true;
+      }
+      this.mutex.Unlock();
+    }
+  }
+}
+
+function main(): void {
+  const status = run(os.Args[1:]);
+  if (status != 0) {
+    os.Exit(status);
+  }
+}
+
+function run(args: string[]): int {
+  const [input, configError] = prepareRunnerInput(args);
+  if (configError != nil) {
+    fmt.Fprintln(os.Stderr, "configuration error:", configError.Error());
+    return 2;
+  }
+  let path = input.path;
+  let listOnly = false;
+  let bail = false;
+  let failOnTodo = false;
+  let updateSnapshots = false;
+  let pathProvided = false;
+  let filter = "";
+  let awaitingFilter = false;
+  let timeoutText = "";
+  let awaitingTimeout = false;
+  let shuffleText = "";
+  let awaitingShuffle = false;
+  let shardText = "";
+  let awaitingShard = false;
+  let reporter = "text";
+  let awaitingReporter = false;
+  let repeatText = "";
+  let repeatProvided = false;
+  let awaitingRepeat = false;
+  let jobsText = "";
+  let jobsProvided = false;
+  let awaitingJobs = false;
+  let watch = false;
+  let watchIntervalText = "";
+  let watchIntervalProvided = false;
+  let awaitingWatchInterval = false;
+  let coverageDirectory = "";
+  let coverageProvided = false;
+  let awaitingCoverage = false;
+  let artifactDirectory = "";
+  let artifactsProvided = false;
+  let awaitingArtifacts = false;
+  let saveFailures = "";
+  let rerunFailures = "";
+  let awaitingSaveFailures = false;
+  let awaitingRerunFailures = false;
+  let includes: string[] = [];
+  let excludes: string[] = [];
+  let includeProvided = false;
+  let excludeProvided = false;
+  let awaitingInclude = false;
+  let awaitingExclude = false;
+  let onceArgs: string[] = [];
+  for (const argument of input.controls) {
+    onceArgs = append(onceArgs, argument);
+  }
+  for (const pattern of input.config.include) {
+    includes = append(includes, pattern);
+  }
+  for (const pattern of input.config.exclude) {
+    excludes = append(excludes, pattern);
+  }
+  // Listing uses discovery defaults, without inheriting execution policies.
+  if (!input.listOnly) {
+    const config = input.config;
+    if (config.repeat != nil) {
+      repeatProvided = true;
+      repeatText = strconv.Itoa(*config.repeat);
+    }
+    if (config.jobs != nil) {
+      jobsProvided = true;
+      jobsText = strconv.Itoa(*config.jobs);
+    }
+    if (config.timeout != nil) {
+      timeoutText = *config.timeout;
+    }
+    if (config.reporter != nil) {
+      reporter = *config.reporter;
+    }
+    if (config.filter != nil) {
+      filter = *config.filter;
+    }
+    if (config.bail != nil) {
+      bail = *config.bail;
+    }
+    if (config.failOnTodo != nil) {
+      failOnTodo = *config.failOnTodo;
+    }
+  }
+  for (const argument of input.args) {
+    if (awaitingWatchInterval) {
+      watchIntervalText = argument;
+      awaitingWatchInterval = false;
+      continue;
+    }
+    // Only interpret watch flags between option values. The remaining
+    // arguments are passed to the ordinary runner for every iteration.
+    if (!awaitingRepeat && !awaitingInclude && !awaitingExclude && !awaitingSaveFailures && !awaitingRerunFailures && !awaitingArtifacts && !awaitingCoverage && !awaitingJobs && !awaitingShard && !awaitingReporter && !awaitingShuffle && !awaitingTimeout && !awaitingFilter) {
+      if (argument == "--watch") {
+        watch = true;
+        continue;
+      }
+      if (argument == "--watch-interval") {
+        watchIntervalProvided = true;
+        awaitingWatchInterval = true;
+        continue;
+      }
+    }
+    onceArgs = append(onceArgs, argument);
+    if (awaitingInclude || awaitingExclude) {
+      if (argument == "" || strings.HasPrefix(argument, "-")) {
+        fmt.Fprintln(os.Stderr, "--include and --exclude require a relative file pattern");
+        return 2;
+      }
+      const [normalized, patternError] = validateFilePattern(argument);
+      if (patternError != nil) {
+        fmt.Fprintln(os.Stderr, "invalid file pattern:", patternError.Error());
+        return 2;
+      }
+      if (awaitingInclude) {
+        includes = append(includes, normalized);
+      } else {
+        excludes = append(excludes, normalized);
+      }
+      awaitingInclude = false;
+      awaitingExclude = false;
+      continue;
+    }
+    if (awaitingSaveFailures || awaitingRerunFailures) {
+      if (argument == "" || strings.HasPrefix(argument, "-") || !strings.HasSuffix(argument, ".json")) {
+        fmt.Fprintln(os.Stderr, "failure history options require a .json file path");
+        return 2;
+      }
+      if (awaitingSaveFailures) {
+        saveFailures = argument;
+      } else {
+        rerunFailures = argument;
+      }
+      awaitingSaveFailures = false;
+      awaitingRerunFailures = false;
+      continue;
+    }
+    if (awaitingArtifacts) {
+      if (argument == "" || strings.HasPrefix(argument, "-")) {
+        fmt.Fprintln(os.Stderr, "--artifacts requires an output directory");
+        return 2;
+      }
+      artifactDirectory = argument;
+      awaitingArtifacts = false;
+      continue;
+    }
+    if (awaitingCoverage) {
+      if (argument == "" || strings.HasPrefix(argument, "-")) {
+        fmt.Fprintln(os.Stderr, "--coverage requires an output directory");
+        return 2;
+      }
+      coverageDirectory = argument;
+      awaitingCoverage = false;
+      continue;
+    }
+    if (awaitingRepeat) {
+      repeatText = argument;
+      awaitingRepeat = false;
+      continue;
+    }
+    if (awaitingJobs) {
+      jobsText = argument;
+      awaitingJobs = false;
+      continue;
+    }
+    if (awaitingShard) {
+      if (argument == "" || strings.HasPrefix(argument, "-")) {
+        fmt.Fprintln(os.Stderr, "--shard requires index/count with 1 <= index <= count");
+        return 2;
+      }
+      shardText = argument;
+      awaitingShard = false;
+      continue;
+    }
+    if (awaitingReporter) {
+      if (argument != "text" && argument != "json" && argument != "junit") {
+        fmt.Fprintln(os.Stderr, "--reporter must be text, json, or junit");
+        return 2;
+      }
+      reporter = argument;
+      awaitingReporter = false;
+      continue;
+    }
+    if (awaitingShuffle) {
+      if (argument == "" || strings.HasPrefix(argument, "-")) {
+        fmt.Fprintln(os.Stderr, "--shuffle requires a non-negative integer seed");
+        return 2;
+      }
+      shuffleText = argument;
+      awaitingShuffle = false;
+      continue;
+    }
+    if (awaitingTimeout) {
+      if (argument == "" || strings.HasPrefix(argument, "-")) {
+        fmt.Fprintln(os.Stderr, "--timeout requires a positive duration (for example, 30s)");
+        return 2;
+      }
+      timeoutText = argument;
+      awaitingTimeout = false;
+      continue;
+    }
+    if (awaitingFilter) {
+      if (argument == "" || strings.HasPrefix(argument, "-")) {
+        fmt.Fprintln(os.Stderr, "--filter requires a non-empty test name substring");
+        return 2;
+      }
+      filter = argument;
+      awaitingFilter = false;
+      continue;
+    }
+    if (argument == "--help" || argument == "-h") {
+      fmt.Print("Usage: vasest [--config file.json | --no-config] [--include pattern] [--exclude pattern] [--no-include] [--no-exclude] [--list] [--watch] [--watch-interval duration] [--coverage directory] [--artifacts directory] [--save-failures file.json] [--rerun-failed file.json] [--filter text | --no-filter] [--bail | --no-bail] [--fail-on-todo | --allow-todo] [--update-snapshots] [--timeout duration | --no-timeout] [--shuffle seed] [--shard index/count] [--jobs count] [--repeat count] [--reporter text|json|junit] [test-file-or-directory]\n\nDiscover and run Kinmokusei *.test.km files.\n");
+      return 0;
+    }
+    if (argument == "--version") {
+      fmt.Println("vasest 0.1.0");
+      return 0;
+    }
+    if (argument == "--include") {
+      if (!includeProvided) {
+        includes = [];
+      }
+      includeProvided = true;
+      awaitingInclude = true;
+      continue;
+    }
+    if (argument == "--exclude") {
+      if (!excludeProvided) {
+        excludes = [];
+      }
+      excludeProvided = true;
+      awaitingExclude = true;
+      continue;
+    }
+    if (argument == "--no-include") {
+      includes = [];
+      includeProvided = true;
+      continue;
+    }
+    if (argument == "--no-exclude") {
+      excludes = [];
+      excludeProvided = true;
+      continue;
+    }
+    if (argument == "--list") {
+      listOnly = true;
+      continue;
+    }
+    if (argument == "--bail") {
+      bail = true;
+      continue;
+    }
+    if (argument == "--no-bail") {
+      bail = false;
+      continue;
+    }
+    if (argument == "--allow-todo") {
+      failOnTodo = false;
+      continue;
+    }
+    if (argument == "--no-filter") {
+      filter = "";
+      continue;
+    }
+    if (argument == "--no-timeout") {
+      timeoutText = "";
+      continue;
+    }
+    if (argument == "--fail-on-todo") {
+      failOnTodo = true;
+      continue;
+    }
+    if (argument == "--update-snapshots") {
+      updateSnapshots = true;
+      continue;
+    }
+    if (argument == "--filter") {
+      awaitingFilter = true;
+      continue;
+    }
+    if (argument == "--timeout") {
+      awaitingTimeout = true;
+      continue;
+    }
+    if (argument == "--shuffle") {
+      awaitingShuffle = true;
+      continue;
+    }
+    if (argument == "--shard") {
+      awaitingShard = true;
+      continue;
+    }
+    if (argument == "--reporter") {
+      awaitingReporter = true;
+      continue;
+    }
+    if (argument == "--repeat") {
+      repeatProvided = true;
+      awaitingRepeat = true;
+      continue;
+    }
+    if (argument == "--jobs") {
+      jobsProvided = true;
+      awaitingJobs = true;
+      continue;
+    }
+    if (argument == "--coverage") {
+      coverageProvided = true;
+      awaitingCoverage = true;
+      continue;
+    }
+    if (argument == "--save-failures") {
+      awaitingSaveFailures = true;
+      continue;
+    }
+    if (argument == "--rerun-failed") {
+      awaitingRerunFailures = true;
+      continue;
+    }
+    if (argument == "--artifacts") {
+      artifactsProvided = true;
+      awaitingArtifacts = true;
+      continue;
+    }
+    if (strings.HasPrefix(argument, "-")) {
+      fmt.Fprintln(os.Stderr, "unknown option:", argument);
+      return 2;
+    }
+    if (pathProvided) {
+      fmt.Fprintln(os.Stderr, "expected one test file or directory");
+      return 2;
+    }
+    path = argument;
+    pathProvided = true;
+  }
+  if (awaitingInclude || awaitingExclude) {
+    fmt.Fprintln(os.Stderr, "--include and --exclude require a relative file pattern");
+    return 2;
+  }
+  if (awaitingSaveFailures || awaitingRerunFailures) {
+    fmt.Fprintln(os.Stderr, "failure history options require a .json file path");
+    return 2;
+  }
+  if (awaitingFilter) {
+    fmt.Fprintln(os.Stderr, "--filter requires a non-empty test name substring");
+    return 2;
+  }
+  if (awaitingCoverage) {
+    fmt.Fprintln(os.Stderr, "--coverage requires an output directory");
+    return 2;
+  }
+  if (awaitingArtifacts) {
+    fmt.Fprintln(os.Stderr, "--artifacts requires an output directory");
+    return 2;
+  }
+  if (awaitingTimeout) {
+    fmt.Fprintln(os.Stderr, "--timeout requires a positive duration (for example, 30s)");
+    return 2;
+  }
+  if (awaitingShuffle) {
+    fmt.Fprintln(os.Stderr, "--shuffle requires a non-negative integer seed");
+    return 2;
+  }
+  if (awaitingShard) {
+    fmt.Fprintln(os.Stderr, "--shard requires index/count with 1 <= index <= count");
+    return 2;
+  }
+  if (awaitingReporter) {
+    fmt.Fprintln(os.Stderr, "--reporter must be text, json, or junit");
+    return 2;
+  }
+  let repeat = 1;
+  if (repeatProvided) {
+    const [count, parseError] = strconv.Atoi(repeatText);
+    if (awaitingRepeat || parseError != nil || count < 1) {
+      fmt.Fprintln(os.Stderr, "--repeat requires a positive integer");
+      return 2;
+    }
+    repeat = count;
+  }
+  let jobs = 1;
+  if (jobsProvided) {
+    const [count, parseError] = strconv.Atoi(jobsText);
+    if (awaitingJobs || parseError != nil || count < 1) {
+      fmt.Fprintln(os.Stderr, "--jobs requires a positive integer");
+      return 2;
+    }
+    jobs = count;
+  }
+  let timeout: time.Duration = 0;
+  if (timeoutText != "") {
+    const [parsed, parseError] = time.ParseDuration(timeoutText);
+    if (parseError != nil || parsed <= 0) {
+      fmt.Fprintln(os.Stderr, "--timeout requires a positive duration (for example, 30s)");
+      return 2;
+    }
+    timeout = parsed;
+  }
+  let shuffleSeed: int64 = 0;
+  if (shuffleText != "") {
+    const [parsed, parseError] = strconv.ParseInt(shuffleText, 10, 64);
+    if (parseError != nil || parsed < 0) {
+      fmt.Fprintln(os.Stderr, "--shuffle requires a non-negative integer seed");
+      return 2;
+    }
+    shuffleSeed = parsed;
+  }
+  let shardIndex = 1;
+  let shardCount = 1;
+  if (shardText != "") {
+    const parts = strings.Split(shardText, "/");
+    if (len(parts) != 2) {
+      fmt.Fprintln(os.Stderr, "--shard requires index/count with 1 <= index <= count");
+      return 2;
+    }
+    const [index, indexError] = strconv.Atoi(parts[0]);
+    const [count, countError] = strconv.Atoi(parts[1]);
+    if (indexError != nil || countError != nil || index < 1 || count < 1 || index > count) {
+      fmt.Fprintln(os.Stderr, "--shard requires index/count with 1 <= index <= count");
+      return 2;
+    }
+    shardIndex = index;
+    shardCount = count;
+    shardText = fmt.Sprintf("%d/%d", index, count);
+  }
+  if (listOnly && (saveFailures != "" || rerunFailures != "" || artifactsProvided || coverageProvided || filter != "" || bail || failOnTodo || updateSnapshots || timeoutText != "" || shuffleText != "" || jobsProvided || repeatProvided || reporter != "text")) {
+    fmt.Fprintln(os.Stderr, "--list cannot be combined with --save-failures, --rerun-failed, --artifacts, --coverage, --filter, --bail, --fail-on-todo, --update-snapshots, --timeout, --shuffle, --jobs, --repeat, or a machine-readable reporter");
+    return 2;
+  }
+
+  let watchInterval: time.Duration = 250 * time.Millisecond;
+  if (watchIntervalProvided) {
+    const [duration, parseError] = time.ParseDuration(watchIntervalText);
+    if (awaitingWatchInterval || parseError != nil || duration <= 0) {
+      fmt.Fprintln(os.Stderr, "--watch-interval requires a positive duration");
+      return 2;
+    }
+    if (!watch) {
+      fmt.Fprintln(os.Stderr, "--watch-interval requires --watch");
+      return 2;
+    }
+    watchInterval = duration;
+  }
+  if (watch) {
+    if (rerunFailures != "") {
+      fmt.Fprintln(os.Stderr, "--rerun-failed cannot be combined with --watch");
+      return 2;
+    }
+    if (listOnly || reporter == "junit") {
+      fmt.Fprintln(os.Stderr, "--watch cannot be combined with --list or --reporter junit");
+      return 2;
+    }
+    const [roots, rootError] = watchRoots(path);
+    if (rootError != nil) {
+      fmt.Fprintln(os.Stderr, "watch error:", rootError.Error());
+      return 2;
+    }
+    const [ctx, stop] = signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM);
+    defer stop();
+    // Keep one output protocol for the lifetime of the watch session.
+    onceArgs = append(onceArgs, "--reporter", reporter);
+    let currentRoots = roots;
+    return watchLoopWithSignature(ctx, watchInterval, (): Result<string> => {
+      const [currentInput, inputError] = prepareRunnerInput(args);
+      if (inputError == nil) {
+        const [updatedRoots, updateError] = watchRoots(currentInput.path);
+        if (updateError != nil) {
+          return fail(updateError);
+        }
+        currentRoots = updatedRoots;
+      }
+      // Invalid/deleted configuration still contributes to the signature, so
+      // a later edit can recover the watch session after a status-2 run.
+      let watched: string[] = [];
+      for (const root of currentRoots) {
+        watched = append(watched, root);
+      }
+      if (input.configPath != "") {
+        watched = append(watched, input.configPath);
+      }
+      return watchSignature(watched, !updateSnapshots);
+    }, (): int => {
+      return run(onceArgs);
+    }, (iteration: int): void => {
+      if (reporter == "json") {
+        fmt.Printf("{\"type\":\"watch\",\"iteration\":%d}\n", iteration);
+      } else {
+        fmt.Printf("WATCH run %d\n", iteration);
+      }
+    });
+  }
+
+  const [discoveredFiles, discoveryError] = discover(path);
+  if (discoveryError != nil) {
+    fmt.Fprintln(os.Stderr, "discovery error:", discoveryError.Error());
+    return 2;
+  }
+  if (len(discoveredFiles) == 0) {
+    if (reporter == "junit") {
+      let emptyFiles: JUnitFile[] = [];
+      emptyFiles = append(emptyFiles, junitFile(path, "", 0, [], errors.New("no *.test.km files found"), ""));
+      writeJUnit(emptyFiles);
+      return 1;
+    }
+    fmt.Fprintln(os.Stderr, "no *.test.km files found in", path);
+    return 1;
+  }
+  const [eligibleFiles, selectionError] = selectTestFiles(path, discoveredFiles, includes, excludes);
+  if (selectionError != nil) {
+    fmt.Fprintln(os.Stderr, "file selection error:", selectionError.Error());
+    return 2;
+  }
+  const fileNoMatch = len(eligibleFiles) == 0;
+  const excludedFiles = len(discoveredFiles) - len(eligibleFiles);
+  const shardedFiles = shardFiles(eligibleFiles, shardIndex, shardCount);
+  let files: string[] = [];
+  let history = FailureHistory { version: 1, files: [] };
+  let hasHistoryFile = false;
+  if (rerunFailures != "") {
+    const [loaded, historyError] = readFailureHistory(rerunFailures);
+    if (historyError != nil) {
+      fmt.Fprintln(os.Stderr, "failure history error:", historyError.Error());
+      return 2;
+    }
+    history = loaded;
+    for (const file of eligibleFiles) {
+      const [selection, selectionError] = rerunSelection(history, rerunFailures, file);
+      if (selectionError != nil) {
+        fmt.Fprintln(os.Stderr, "failure history error:", selectionError.Error());
+        return 2;
+      }
+      if (selection != "") {
+        hasHistoryFile = true;
+      }
+    }
+    for (const file of shardedFiles) {
+      const [selection, selectionError] = rerunSelection(history, rerunFailures, file);
+      if (selectionError != nil) {
+        fmt.Fprintln(os.Stderr, "failure history error:", selectionError.Error());
+        return 2;
+      }
+      if (selection != "") {
+        files = append(files, file);
+      }
+    }
+  } else {
+    files = shardedFiles;
+  }
+  for (const file of files) {
+    const [absolute, resolveError] = filepath.Abs(file);
+    if (resolveError != nil) {
+      fmt.Fprintln(os.Stderr, "cannot resolve test file:", resolveError.Error());
+      return 2;
+    }
+    if (!utf8.ValidString(file) || !utf8.ValidString(absolute)) {
+      fmt.Fprintln(os.Stderr, "test file paths must be valid UTF-8");
+      return 2;
+    }
+  }
+  if (listOnly) {
+    if (fileNoMatch) {
+      fmt.Fprintln(os.Stderr, "no test files match include/exclude patterns");
+      return 1;
+    }
+    for (const file of files) {
+      fmt.Println(file);
+    }
+    return 0;
+  }
+  if ((len(includes) > 0 || len(excludes) > 0) && reporter == "text") {
+    fmt.Printf("FILES %d selected, %d excluded\n", len(eligibleFiles), excludedFiles);
+  }
+  if (shardText != "" && reporter == "text") {
+    fmt.Println("SHARD", shardText);
+  }
+  if (shuffleText != "") {
+    shuffleFiles(files, shuffleSeed);
+    if (reporter == "text") {
+      fmt.Printf("SHUFFLE seed %d\n", shuffleSeed);
+    }
+  }
+
+  let maximumText = "9223372036854775807";
+  if (strconv.IntSize == 32) {
+    maximumText = "2147483647";
+  }
+  const [maximum, maximumError] = strconv.Atoi(maximumText);
+  if (maximumError != nil || (len(files) > 0 && repeat > maximum / len(files))) {
+    fmt.Fprintln(os.Stderr, "--repeat requests too many file executions");
+    return 2;
+  }
+  const planned = len(files) * repeat;
+  let keika = os.Getenv("KEIKA");
+  if (keika == "") {
+    keika = "keika";
+  }
+  let matchLog = "";
+  if (filter != "" || rerunFailures != "") {
+    const [logFile, createError] = os.CreateTemp("", "vasest-matches-*");
+    if (createError != nil) {
+      fmt.Fprintln(os.Stderr, "cannot create filter match log:", createError.Error());
+      return 2;
+    }
+    matchLog = logFile.Name();
+    const closeError = logFile.Close();
+    if (closeError != nil) {
+      os.Remove(matchLog);
+      fmt.Fprintln(os.Stderr, "cannot close filter match log:", closeError.Error());
+      return 2;
+    }
+    defer os.Remove(matchLog);
+  }
+  let failed = 0;
+  let executed = 0;
+  let repeatsStarted = 0;
+  let junitFiles: JUnitFile[] = [];
+  let coverageError = "";
+  let artifactError = "";
+  let runnerError = "";
+  let failedEntries: FailedFile[] = [];
+  let historyError = "";
+  let noMatch = fileNoMatch || (rerunFailures != "" && len(history.files) > 0 && len(shardedFiles) > 0 && !hasHistoryFile);
+  for (let iteration = 1; iteration <= repeat; iteration++) {
+    repeatsStarted++;
+    const failedBefore = failed;
+    const repeatEnv: string[] = ["VASEST_REPEAT_INDEX=" + strconv.Itoa(iteration), "VASEST_REPEAT_COUNT=" + strconv.Itoa(repeat)];
+    let repeatJSON = "";
+    if (repeat > 1) {
+      repeatJSON = fmt.Sprintf(",\"repeatIndex\":%d,\"repeatCount\":%d", iteration, repeat);
+      if (reporter == "text") {
+        fmt.Printf("REPEAT %d/%d\n", iteration, repeat);
+      } else if (reporter == "json") {
+        fmt.Printf("{\"type\":\"repeat\",\"repeatIndex\":%d,\"repeatCount\":%d}\n", iteration, repeat);
+      }
+    }
+    if (matchLog != "") {
+      const clearError = os.WriteFile(matchLog, bytes.NewBufferString("").Bytes(), 0o600);
+      if (clearError != nil) {
+        fmt.Fprintln(os.Stderr, "cannot reset filter match log:", clearError.Error());
+        return 2;
+      }
+    }
+    let parallelResults: FileExecution[] = [];
+    let buildMutex = sync.Mutex {};
+    let coverage: CoverageRun = nil;
+    let artifacts: ArtifactRun = nil;
+    if (coverageProvided) {
+      const [prepared, prepareError] = prepareCoverage(coverageDirectory, files);
+      if (prepareError != nil) {
+        fmt.Fprintln(os.Stderr, "coverage error:", prepareError.Error());
+        return 2;
+      }
+      coverage = prepared;
+      coverage.repeatIndex = iteration;
+      coverage.repeatCount = repeat;
+    }
+    if (artifactsProvided) {
+      let coverageRun = "";
+      if (coverage != nil) {
+        coverageRun = coverage.directory;
+      }
+      const [prepared, prepareError] = prepareArtifacts(artifactDirectory, files, coverageRun);
+      if (prepareError != nil) {
+        fmt.Fprintln(os.Stderr, "artifact error:", prepareError.Error());
+        return 2;
+      }
+      artifacts = prepared;
+      artifacts.repeatIndex = iteration;
+      artifacts.repeatCount = repeat;
+    }
+    if (jobs > 1) {
+      const scheduler = new FileScheduler(files, (file: string): FileExecution => {
+        let dataDirectory = "";
+        if (coverage != nil) {
+          dataDirectory = coverage.dataDirectory(file);
+        }
+        let artifactData = "";
+        if (artifacts != nil) {
+          artifactData = artifacts.fileDirectory(file);
+        }
+        const [selection, selectionError] = rerunSelection(history, rerunFailures, file);
+        if (selectionError != nil) {
+          return FileExecution { executed: true, output: "", durationNs: 0, runError: nil, reportFailure: "", fatalError: selectionError, suites: [], rawReport: "", expectedExit: false };
+        }
+        return executeTestFile(keika, file, filter, matchLog, bail, failOnTodo, updateSnapshots, timeout, shuffleText, reporter, &buildMutex, dataDirectory, artifactData, selection, repeatEnv);
+      }, bail);
+      parallelResults = scheduler.run(jobs);
+    }
+    let fileIndex = 0;
+    for (const file of files) {
+      let execution = FileExecution { executed: false, output: "", durationNs: 0, runError: nil, reportFailure: "", fatalError: nil, suites: [], rawReport: "", expectedExit: false };
+      if (jobs > 1) {
+        execution = parallelResults[fileIndex];
+      } else {
+        let dataDirectory = "";
+        if (coverage != nil) {
+          dataDirectory = coverage.dataDirectory(file);
+        }
+        let artifactData = "";
+        if (artifacts != nil) {
+          artifactData = artifacts.fileDirectory(file);
+        }
+        const [selection, selectionError] = rerunSelection(history, rerunFailures, file);
+        if (selectionError != nil) {
+          fmt.Fprintln(os.Stderr, "failure history error:", selectionError.Error());
+          return 2;
+        }
+        execution = executeTestFile(keika, file, filter, matchLog, bail, failOnTodo, updateSnapshots, timeout, shuffleText, reporter, nil, dataDirectory, artifactData, selection, repeatEnv);
+      }
+      fileIndex++;
+      if (!execution.executed) {
+        continue;
+      }
+      executed++;
+      const failureEntry = failedFile(file, execution);
+      if (failureEntry.wholeFile || len(failureEntry.suites) > 0) {
+        failedEntries = mergeFailure(failedEntries, failureEntry);
+      }
+      if (coverage != nil) {
+        const collectError = coverage.collect(file, execution.runError);
+        if (collectError != nil) {
+          coverageError = collectError.Error();
+        }
+      }
+      if (artifacts != nil) {
+        let profile = "";
+        if (coverage != nil) {
+          profile = coverage.profilePath(file);
+        }
+        const collectError = artifacts.collect(file, execution, profile);
+        if (collectError != nil) {
+          artifactError = collectError.Error();
+        }
+      }
+      if (execution.fatalError != nil) {
+        runnerError = execution.fatalError.Error();
+        if (artifacts != nil) {
+          artifactError = runnerError;
+        }
+      }
+      if ((jobs > 1 || artifacts != nil || timeout > 0) && reporter == "text") {
+        fmt.Println("FILE", file);
+        fmt.Print(execution.output);
+      }
+      const runError = fileExecutionError(execution);
+      // A framework-marked failure exit is already represented by its cases.
+      // Other process failures must remain visible alongside case failures.
+      let junitRunError = runError;
+      if (execution.expectedExit && execution.fatalError == nil) {
+        junitRunError = nil;
+      }
+      const reportFailure = execution.reportFailure;
+      const fileDuration = execution.durationNs;
+      let junitCases: JUnitCase[] = [];
+      for (const suite of execution.suites) {
+        const parsed = suite.report;
+        if (reporter == "json") {
+          fmt.Printf("{\"type\":\"suite\",\"file\":%s,\"report\":%s%s}\n", jsonText(file), suite.raw, repeatJSON);
+        }
+        if (reporter == "junit") {
+          let suiteHasFailure = false;
+          for (const result of parsed.summary.results) {
+            let status = result.status;
+            let message = result.message;
+            if (status == "todo" && parsed.summary.failOnTodo) {
+              status = "fail";
+              message = "todo tests are not allowed (--fail-on-todo)";
+            }
+            if (status == "fail") {
+              suiteHasFailure = true;
+            }
+            junitCases = append(junitCases, JUnitCase { name: result.name, classname: parsed.summary.suite, status: status, message: message, durationNs: result.durationNs, failures: result.failures });
+          }
+          if (!parsed.success && !suiteHasFailure) {
+            junitCases = append(junitCases, JUnitCase { name: "<suite>", classname: parsed.summary.suite, status: "fail", message: "suite reported failed tests", durationNs: 0, failures: [] });
+          }
+        }
+      }
+      if (reporter == "json") {
+        let status = "pass";
+        const message = fileFailureMessage(runError, reportFailure);
+        if (runError != nil || reportFailure != "") {
+          status = "fail";
+        }
+        fmt.Printf("{\"type\":\"file\",\"path\":%s,\"status\":%s,\"durationNs\":%d,\"output\":%s,\"error\":%s%s}\n", jsonText(file), jsonText(status), fileDuration, jsonText(execution.output), jsonText(message), repeatJSON);
+      }
+      if (runError != nil || reportFailure != "") {
+        failed++;
+        if (reporter == "text") {
+          fmt.Fprintln(os.Stderr, "FILE FAILED", file, fileFailureMessage(runError, reportFailure));
+        }
+        if (bail && jobs == 1) {
+          if (reporter == "junit") {
+            junitFiles = append(junitFiles, junitFile(repeatFileName(file, iteration, repeat), execution.output, fileDuration, junitCases, junitRunError, reportFailure));
+          }
+          break;
+        }
+      }
+      if (reporter == "junit") {
+        junitFiles = append(junitFiles, junitFile(repeatFileName(file, iteration, repeat), execution.output, fileDuration, junitCases, junitRunError, reportFailure));
+      }
+      if (execution.fatalError != nil && jobs == 1) {
+        break;
+      }
+    }
+    if (coverage != nil) {
+      const finishError = coverage.finish();
+      if (finishError != nil) {
+        coverageError = finishError.Error();
+      }
+      if (reporter == "json") {
+        fmt.Printf("{\"type\":\"coverage\",\"directory\":%s,\"manifest\":%s,\"source\":\"generated-go\",\"error\":%s%s}\n", jsonText(coverage.directory), jsonText(filepath.Join(coverage.directory, "manifest.json")), jsonText(coverageError), repeatJSON);
+      } else if (reporter == "text") {
+        fmt.Println("COVERAGE", filepath.Join(coverage.directory, "manifest.json"));
+      }
+      if (coverageError != "") {
+        fmt.Fprintln(os.Stderr, "coverage error:", coverageError);
+      }
+    }
+    if (artifacts != nil) {
+      const finishError = artifacts.finish();
+      if (finishError != nil) {
+        artifactError = finishError.Error();
+      }
+      if (reporter == "json") {
+        fmt.Printf("{\"type\":\"artifacts\",\"directory\":%s,\"manifest\":%s,\"error\":%s%s}\n", jsonText(artifacts.directory), jsonText(filepath.Join(artifacts.directory, "manifest.json")), jsonText(artifactError), repeatJSON);
+      } else if (reporter == "text") {
+        fmt.Println("ARTIFACTS", filepath.Join(artifacts.directory, "manifest.json"));
+      }
+      if (artifactError != "") {
+        fmt.Fprintln(os.Stderr, "artifact error:", artifactError);
+      }
+    }
+    if (failed == failedBefore && (filter != "" || rerunFailures != "") && len(files) > 0) {
+      const [matches, readError] = os.ReadFile(matchLog);
+      if (readError != nil) {
+        fmt.Fprintln(os.Stderr, "cannot read filter match log:", readError.Error());
+        return 2;
+      }
+      if (len(matches) == 0) {
+        noMatch = true;
+      }
+    }
+    if (iteration == repeat || len(files) == 0 || noMatch || coverageError != "" || artifactError != "" || runnerError != "" || (bail && failed > failedBefore)) {
+      break;
+    }
+  }
+  if (saveFailures != "" && !noMatch) {
+    const saveError = saveFailureHistory(saveFailures, failedEntries);
+    if (saveError != nil) {
+      historyError = saveError.Error();
+      fmt.Fprintln(os.Stderr, "cannot save failure history:", historyError);
+    }
+    if (reporter == "json") {
+      fmt.Printf("{\"type\":\"failures\",\"path\":%s,\"failedFiles\":%d,\"error\":%s}\n", jsonText(saveFailures), len(failedEntries), jsonText(historyError));
+    } else if (reporter == "text" && historyError == "") {
+      fmt.Println("FAILURES", saveFailures);
+    }
+  }
+  let noMatchMessage = fmt.Sprintf("no tests match %q", filter);
+  if (rerunFailures != "") {
+    noMatchMessage = "no tests match failure history and filter";
+  }
+  let noMatchName = "<filter>";
+  if (fileNoMatch) {
+    noMatchMessage = "no test files match include/exclude patterns";
+    noMatchName = "<files>";
+  }
+  if (reporter == "junit") {
+    if (noMatch) {
+      junitFiles = append(junitFiles, JUnitFile { path: noMatchName, output: "", durationNs: 0, cases: [JUnitCase { name: noMatchName, classname: "vasest", status: "fail", message: noMatchMessage, durationNs: 0, failures: [] }] });
+    }
+    writeJUnit(junitFiles);
+  } else if (reporter == "json") {
+    let seed = "";
+    if (shuffleText != "") {
+      seed = shuffleText;
+    }
+    let repeatSummary = "";
+    if (repeat > 1) {
+      repeatSummary = fmt.Sprintf(",\"repeatCount\":%d,\"repeatsStarted\":%d", repeat, repeatsStarted);
+    }
+    fmt.Printf("{\"type\":\"summary\",\"passedFiles\":%d,\"failedFiles\":%d,\"notRunFiles\":%d,\"noMatch\":%t,\"failOnTodo\":%t,\"updateSnapshots\":%t,\"seed\":%s,\"shard\":%s,\"jobs\":%d,\"include\":%s,\"exclude\":%s,\"excludedFiles\":%d%s}\n", executed - failed, failed, planned - executed, noMatch, failOnTodo, updateSnapshots, jsonText(seed), jsonText(shardText), jobs, jsonStrings(includes), jsonStrings(excludes), excludedFiles, repeatSummary);
+  } else {
+    fmt.Printf("%d file(s) passed, %d failed, %d not run\n", executed - failed, failed, planned - executed);
+    if (noMatch) {
+      fmt.Fprintln(os.Stderr, noMatchMessage);
+    }
+  }
+  if (coverageError != "" || artifactError != "" || runnerError != "" || historyError != "") {
+    return 2;
+  }
+  if (failed > 0 || noMatch) {
+    return 1;
+  }
+  return 0;
+}
+
+function jsonStrings(values: string[]): string {
+  const [data, encodeError] = json.Marshal(values);
+  if (encodeError != nil) {
+    throw encodeError;
+  }
+  return string(data);
+}
+
+function jsonText(value: string): string {
+  const [encoded, encodeError] = json.Marshal(value);
+  if (encodeError != nil) {
+    throw encodeError;
+  }
+  return string(encoded);
+}
+
+function shardFiles(files: string[], index: int, count: int): string[] {
+  let selected: string[] = [];
+  for (let position = 0; position < len(files); position++) {
+    if (position % count == index - 1) {
+      selected = append(selected, files[position]);
+    }
+  }
+  return selected;
+}
+
+function readSuiteReport(line: string): Result<SuiteReport> {
+  if (!utf8.ValidString(line)) {
+    return fail(errors.New("suite report must be valid UTF-8"));
+  }
+  if (hasUnpairedJSONSurrogate(line)) {
+    return fail(errors.New("suite report must use paired Unicode surrogate escapes"));
+  }
+  const fieldError = duplicateJSONFieldError(line);
+  if (fieldError != nil) {
+    return fail(fieldError);
+  }
+  const reportValue = reflect.New(reflect.TypeOf(SuiteReport {
+    success: false,
+    summary: SummaryReport { suite: "", failOnTodo: false, passed: 0, failed: 0, skipped: 0, todo: 0, durationNs: 0, results: [] }
+  }));
+  const parseError = json.Unmarshal(bytes.NewBufferString(line).Bytes(), reportValue.Interface());
+  if (parseError != nil) {
+    return fail(parseError);
+  }
+  const parsed = reportValue.Elem().Interface() as! SuiteReport;
+  const summary = parsed.summary;
+  if (strings.TrimSpace(summary.suite) == "") {
+    return fail(errors.New("suite name must not be empty"));
+  }
+  if (summary.passed < 0 || summary.failed < 0 || summary.skipped < 0 || summary.todo < 0 || summary.durationNs < 0) {
+    return fail(errors.New("counts and durations must not be negative"));
+  }
+  let passed = 0;
+  let failed = 0;
+  let skipped = 0;
+  let todo = 0;
+  for (const result of summary.results) {
+    if (strings.TrimSpace(result.name) == "" || result.durationNs < 0) {
+      return fail(errors.New("invalid case name or duration"));
+    }
+    if (result.passed != (result.status == "pass")) {
+      return fail(errors.New("case passed flag disagrees with status"));
+    }
+    if (len(result.failures) > 0 && result.status != "fail") {
+      return fail(errors.New("failure details require a failed case"));
+    }
+    for (const failure of result.failures) {
+      if (failure.phase != "beforeAll" && failure.phase != "beforeEach" && failure.phase != "body" && failure.phase != "afterEach" && failure.phase != "cleanup" && failure.phase != "fixture" && failure.phase != "afterAll") {
+        return fail(errors.New("unknown failure phase"));
+      }
+      const location = failure.location;
+      if (location.line == 0 && location.file == "" && location.source == "") {
+        continue;
+      }
+      if (location.line <= 0 || strings.TrimSpace(location.file) == "" || strings.ContainsAny(location.file, "\r\n\x00") || (location.source != "go" && location.source != "kinmokusei" && location.source != "explicit")) {
+        return fail(errors.New("invalid failure location"));
+      }
+    }
+    if (result.status == "pass") {
+      passed++;
+    } else if (result.status == "fail") {
+      failed++;
+    } else if (result.status == "skip") {
+      skipped++;
+    } else if (result.status == "todo") {
+      todo++;
+    } else {
+      return fail(errors.New("unknown case status"));
+    }
+    if (result.status == "todo" && result.durationNs != 0) {
+      return fail(errors.New("todo cases must have zero duration"));
+    }
+    if (result.status == "skip" && result.durationNs > 0 && strings.TrimSpace(result.message) == "") {
+      return fail(errors.New("executed skipped cases must have a reason"));
+    }
+  }
+  // Filtered cases count as skipped without appearing in results.
+  if (passed != summary.passed || failed != summary.failed || skipped > summary.skipped || todo != summary.todo) {
+    return fail(errors.New("summary counts disagree with case results"));
+  }
+  const success = (summary.passed > 0 || summary.failed > 0 || summary.skipped > 0 || summary.todo > 0) && summary.failed == 0 && !(summary.failOnTodo && summary.todo > 0);
+  if (parsed.success != success) {
+    return fail(errors.New("suite success disagrees with summary"));
+  }
+  return ok(parsed);
+}
+
+function rerunReportFailure(selection: string, execution: FileExecution): string {
+  if (selection == "") {
+    return "";
+  }
+  const target = reflect.New(reflect.TypeOf(RerunSelection { all: false, suites: [] }));
+  const parseError = json.Unmarshal(bytes.NewBufferString(selection).Bytes(), target.Interface());
+  if (parseError != nil) {
+    return "invalid rerun selection: " + parseError.Error();
+  }
+  const chosen = target.Elem().Interface() as! RerunSelection;
+  if (chosen.all) {
+    return "";
+  }
+  let counts: Map<string, int> = makeMap[string, int]();
+  for (const suite of execution.suites) {
+    counts[suite.report.summary.suite] = counts[suite.report.summary.suite] + 1;
+  }
+  for (const entry of chosen.suites) {
+    // Whole-suite selections already run all cases under the selected name.
+    // A case selection can instead match a passing duplicate after a rename.
+    if (!entry.wholeSuite && counts[entry.name] > 1) {
+      return fmt.Sprintf("ambiguous rerun suite %q: %d reports share that name; rerun the whole file", entry.name, counts[entry.name]);
+    }
+  }
+  return "";
+}
+
+function fileExecutionError(execution: FileExecution): error {
+  if (execution.fatalError == nil) {
+    return execution.runError;
+  }
+  if (execution.runError == nil || errors.Is(execution.fatalError, execution.runError)) {
+    return execution.fatalError;
+  }
+  // Archiving failures are also returned by the build operation. Keep a
+  // shared cause once without comparing potentially non-comparable errors.
+  if (errors.Is(execution.runError, execution.fatalError)) {
+    return execution.runError;
+  }
+  return errors.Join(execution.runError, execution.fatalError);
+}
+
+function fileFailureMessage(runError: error, reportFailure: string): string {
+  if (runError == nil) {
+    return reportFailure;
+  }
+  let message = runError.Error();
+  if (reportFailure != "" && reportFailure != "suite reported failed tests") {
+    if (message != "") {
+      message += "\n";
+    }
+    message += reportFailure;
+  }
+  return message;
+}
+
+function junitFile(path: string, output: string, durationNs: int64, cases: JUnitCase[], runError: error, reportFailure: string): JUnitFile {
+  let hasFailure = false;
+  for (const testCase of cases) {
+    if (testCase.status == "fail") {
+      hasFailure = true;
+    }
+  }
+  const independentReportFailure = reportFailure != "" && reportFailure != "suite reported failed tests";
+  if (runError != nil || independentReportFailure || (!hasFailure && reportFailure != "")) {
+    const message = fileFailureMessage(runError, reportFailure);
+    cases = append(cases, JUnitCase { name: "<file>", classname: path, status: "fail", message: message, durationNs: 0, failures: [] });
+  }
+  let file = JUnitFile { path: path, output: output, durationNs: durationNs, cases: [] };
+  for (const testCase of cases) {
+    file.cases = append(file.cases, testCase);
+  }
+  return file;
+}
+
+function xmlText(value: string): string {
+  const valid = strings.Map((character: int32): int32 => {
+    if ((character < 32 && character != 9 && character != 10 && character != 13) || character == 0xFFFE || character == 0xFFFF) {
+      return -1;
+    }
+    return character;
+  }, value);
+  let result = strings.ReplaceAll(valid, "&", "&amp;");
+  result = strings.ReplaceAll(result, "<", "&lt;");
+  result = strings.ReplaceAll(result, ">", "&gt;");
+  result = strings.ReplaceAll(result, "\"", "&quot;");
+  result = strings.ReplaceAll(result, "'", "&apos;");
+  result = strings.ReplaceAll(result, "\t", "&#x9;");
+  result = strings.ReplaceAll(result, "\n", "&#xA;");
+  return strings.ReplaceAll(result, "\r", "&#xD;");
+}
+
+function writeJUnit(files: JUnitFile[]): void {
+  let total = 0;
+  let failed = 0;
+  let skipped = 0;
+  let durationNs: int64 = 0;
+  for (const file of files) {
+    total += len(file.cases);
+    durationNs += file.durationNs;
+    for (const testCase of file.cases) {
+      if (testCase.status == "fail") {
+        failed++;
+      } else if (testCase.status == "skip" || testCase.status == "todo") {
+        skipped++;
+      }
+    }
+  }
+  const document = bytes.NewBufferString("");
+  fmt.Fprintf(document, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<testsuites tests=\"%d\" failures=\"%d\" skipped=\"%d\" time=\"%.6f\">\n", total, failed, skipped, float64(durationNs) / 1000000000.0);
+  for (const file of files) {
+    let fileFailed = 0;
+    let fileSkipped = 0;
+    for (const testCase of file.cases) {
+      if (testCase.status == "fail") {
+        fileFailed++;
+      } else if (testCase.status == "skip" || testCase.status == "todo") {
+        fileSkipped++;
+      }
+    }
+    fmt.Fprintf(document, "  <testsuite name=\"%s\" tests=\"%d\" failures=\"%d\" skipped=\"%d\" time=\"%.6f\">\n", xmlText(file.path), len(file.cases), fileFailed, fileSkipped, float64(file.durationNs) / 1000000000.0);
+    for (const testCase of file.cases) {
+      fmt.Fprintf(document, "    <testcase classname=\"%s\" name=\"%s\" time=\"%.6f\">", xmlText(testCase.classname), xmlText(testCase.name), float64(testCase.durationNs) / 1000000000.0);
+      if (testCase.status == "fail") {
+        let detail = testCase.message;
+        if (len(testCase.failures) > 0) {
+          detail = "";
+          for (const failure of testCase.failures) {
+            if (detail != "") {
+              detail += "\n";
+            }
+            let message = failure.message;
+            if (message == "") {
+              message = "(empty error message)";
+            }
+            detail += "[" + failure.phase + "] " + message;
+            if (failure.location.line > 0) {
+              detail += fmt.Sprintf("\n    at %s:%d (%s)", failure.location.file, failure.location.line, failure.location.source);
+            }
+          }
+        }
+        fmt.Fprintf(document, "<failure message=\"%s\">%s</failure>", xmlText(testCase.message), xmlText(detail));
+      } else if (testCase.status == "skip" || testCase.status == "todo") {
+        let message = testCase.message;
+        if (message == "") {
+          message = testCase.status;
+        }
+        fmt.Fprintf(document, "<skipped message=\"%s\"/>", xmlText(message));
+      }
+      fmt.Fprintln(document, "</testcase>");
+    }
+    if (file.output != "") {
+      fmt.Fprintf(document, "    <system-out>%s</system-out>\n", xmlText(file.output));
+    }
+    fmt.Fprintln(document, "  </testsuite>");
+  }
+  fmt.Fprintln(document, "</testsuites>");
+  fmt.Print(document.String());
+}
+
+function shuffleFiles(files: string[], seed: int64): void {
+  const random = rand.New(rand.NewSource(seed));
+  for (let index = len(files) - 1; index > 0; index--) {
+    const other = random.Intn(index + 1);
+    const current = files[index];
+    files[index] = files[other];
+    files[other] = current;
+  }
+}
+
+function executeTestFile(keika: string, file: string, filter: string, matchLog: string, bail: boolean, failOnTodo: boolean, updateSnapshots: boolean, timeout: time.Duration, shuffleText: string, reporter: string, buildMutex: *sync.Mutex, coverageDirectory: string, artifactDirectory: string, selection: string, repeatEnv: string[]): FileExecution {
+  let result = FileExecution { executed: true, output: "", durationNs: 0, runError: nil, reportFailure: "", fatalError: nil, suites: [], rawReport: "", expectedExit: false };
+  const [reportFile, createError] = os.CreateTemp("", "vasest-report-*");
+  if (createError != nil) {
+    result.fatalError = fmt.Errorf("cannot create test report: %w", createError);
+    return result;
+  }
+  const reportPath = reportFile.Name();
+  defer os.Remove(reportPath);
+  defer os.Remove(reportPath + ".exit");
+  const closeError = reportFile.Close();
+  if (closeError != nil) {
+    result.fatalError = fmt.Errorf("cannot close test report: %w", closeError);
+    return result;
+  }
+  if (reporter == "text" && buildMutex == nil && artifactDirectory == "" && timeout == 0) {
+    fmt.Println("FILE", file);
+  }
+  const output = bytes.NewBufferString("");
+  const started = time.Now();
+  result.runError = runFile(keika, file, filter, matchLog, bail, failOnTodo, updateSnapshots, timeout, shuffleText, reportPath, output, reporter != "text" || buildMutex != nil || artifactDirectory != "" || timeout > 0, buildMutex, coverageDirectory, artifactDirectory, &result.fatalError, selection, repeatEnv);
+  result.durationNs = time.Since(started).Nanoseconds();
+  result.output = output.String();
+  const [data, readError] = os.ReadFile(reportPath);
+  if (readError != nil) {
+    const failure = fmt.Errorf("cannot read test report: %w", readError);
+    if (result.fatalError == nil) {
+      result.fatalError = failure;
+    } else {
+      result.fatalError = errors.Join(result.fatalError, failure);
+    }
+    return result;
+  }
+  result.rawReport = string(data);
+  const [exitData, exitReadError] = os.ReadFile(reportPath + ".exit");
+  if (exitReadError == nil && string(exitData) == "1\n" && result.runError != nil) {
+    let exitValue = exec.ExitError {};
+    const exitTarget = reflect.New(reflect.TypeOf(&exitValue));
+    if (errors.As(result.runError, exitTarget.Interface())) {
+      const values = exitTarget.Elem().MethodByName("ExitCode").Call([]);
+      result.expectedExit = values[0].Int() == 1;
+    }
+  }
+  for (const line of strings.Split(string(data), "\n")) {
+    if (line == "") {
+      continue;
+    }
+    const [report, parseError] = readSuiteReport(line);
+    if (parseError != nil) {
+      result.reportFailure = "invalid suite report: " + parseError.Error();
+      continue;
+    }
+    result.suites = append(result.suites, ReportedSuite { raw: line, report: report });
+    if (!report.success && result.reportFailure == "") {
+      result.reportFailure = "suite reported failed tests";
+    }
+  }
+  const rerunFailure = rerunReportFailure(selection, result);
+  if (rerunFailure != "") {
+    if (result.reportFailure != "" && result.reportFailure != "suite reported failed tests") {
+      result.reportFailure += "\n";
+    } else {
+      result.reportFailure = "";
+    }
+    result.reportFailure += rerunFailure;
+  }
+  if (result.reportFailure != "suite reported failed tests") {
+    result.expectedExit = false;
+  }
+  if (len(result.suites) == 0 && result.runError == nil && result.reportFailure == "") {
+    result.reportFailure = "no test suites ran";
+  }
+  return result;
+}
+
+function buildFile(command: *exec.Cmd, buildMutex: *sync.Mutex): error {
+  if (buildMutex != nil) {
+    buildMutex.Lock();
+    defer buildMutex.Unlock();
+  }
+  return command.Run();
+}
+
+function buildWithSource(command: *exec.Cmd, buildMutex: *sync.Mutex, file: string, executable: string, artifactDirectory: string, artifactFailure: *error): error {
+  if (buildMutex != nil) {
+    buildMutex.Lock();
+    defer buildMutex.Unlock();
+  }
+  const buildError = buildFile(command, nil);
+  if (buildError != nil) {
+    return buildError;
+  }
+  if (artifactDirectory != "") {
+    const sourceError = archiveGeneratedSource(file, executable, artifactDirectory);
+    if (sourceError != nil) {
+      const failure = fmt.Errorf("cannot archive generated source: %w", sourceError);
+      *artifactFailure = failure;
+      return failure;
+    }
+  }
+  return nil;
+}
+
+function fileTimeoutError(timeout: time.Duration, runError: error, contextError: error): error {
+  // WaitDelay can expire before the context timer is observed. Both indicate
+  // that execution/output exceeded the configured bound, even after exit 0.
+  if (contextError != nil || errors.Is(runError, exec.ErrWaitDelay)) {
+    return fmt.Errorf("timed out after %s", timeout.String());
+  }
+  return runError;
+}
+
+function runFile(keika: string, file: string, filter: string, matchLog: string, bail: boolean, failOnTodo: boolean, updateSnapshots: boolean, timeout: time.Duration, shuffleText: string, reportPath: string, output: *bytes.Buffer, capture: boolean, buildMutex: *sync.Mutex, coverageDirectory: string, artifactDirectory: string, artifactFailure: *error, selection: string, repeatEnv: string[]): error {
+  if (timeout > 0 || buildMutex != nil || coverageDirectory != "" || artifactDirectory != "") {
+    const [directory, createError] = os.MkdirTemp("", "vasest-run-*");
+    if (createError != nil) {
+      return createError;
+    }
+    defer os.RemoveAll(directory);
+    const executable = filepath.Join(directory, "test.exe");
+    const build = exec.Command(keika, "build", "-o", executable, file);
+    if (coverageDirectory != "") {
+      build.Env = append(os.Environ(), "GOFLAGS=" + os.Getenv("GOFLAGS") + " -cover -covermode=atomic", "GOCOVERDIR=");
+    }
+    if (buildMutex == nil) {
+      build.Stdin = os.Stdin;
+    }
+    if (capture) {
+      build.Stdout = output;
+      build.Stderr = output;
+    } else {
+      build.Stdout = os.Stdout;
+      build.Stderr = os.Stderr;
+    }
+    const buildError = buildWithSource(build, buildMutex, file, executable, artifactDirectory, artifactFailure);
+    if (buildError != nil) {
+      return buildError;
+    }
+    if (timeout == 0) {
+      return executeFileCommand(exec.Command(executable), file, filter, matchLog, bail, failOnTodo, updateSnapshots, shuffleText, reportPath, output, capture, buildMutex == nil, coverageDirectory, selection, repeatEnv);
+    }
+    const [ctx, cancel] = context.WithTimeout(context.Background(), timeout);
+    defer cancel();
+    const command = exec.CommandContext(ctx, executable);
+    // Descendants may retain captured output after this process stops. Bound
+    // pipe draining as well as execution, using one more timeout interval.
+    command.WaitDelay = timeout;
+    const runError = executeFileCommand(command, file, filter, matchLog, bail, failOnTodo, updateSnapshots, shuffleText, reportPath, output, capture, buildMutex == nil, coverageDirectory, selection, repeatEnv);
+    return fileTimeoutError(timeout, runError, ctx.Err());
+  }
+  return executeFileCommand(exec.Command(keika, "run", file), file, filter, matchLog, bail, failOnTodo, updateSnapshots, shuffleText, reportPath, output, capture, true, "", selection, repeatEnv);
+}
+
+function executeFileCommand(command: *exec.Cmd, file: string, filter: string, matchLog: string, bail: boolean, failOnTodo: boolean, updateSnapshots: boolean, shuffleText: string, reportPath: string, output: *bytes.Buffer, capture: boolean, stdin: boolean, coverageDirectory: string, selection: string, repeatEnv: string[]): error {
+  const [absoluteFile, absoluteError] = filepath.Abs(file);
+  if (absoluteError != nil) {
+    return fmt.Errorf("cannot resolve test file %q: %w", file, absoluteError);
+  }
+  if (stdin) {
+    command.Stdin = os.Stdin;
+  }
+  if (capture) {
+    command.Stdout = output;
+    command.Stderr = output;
+  } else {
+    command.Stdout = os.Stdout;
+    command.Stderr = os.Stderr;
+  }
+  let bailValue = "";
+  if (bail) {
+    bailValue = "1";
+  }
+  let todoValue = "";
+  if (failOnTodo) {
+    todoValue = "1";
+  }
+  let updateValue = "";
+  if (updateSnapshots) {
+    updateValue = "1";
+  }
+  command.Env = append(os.Environ(), "VASEST_RERUN_SELECTION=" + selection, "VASEST_FILTER=" + filter, "VASEST_MATCH_LOG=" + matchLog, "VASEST_BAIL=" + bailValue, "VASEST_FAIL_ON_TODO=" + todoValue, "VASEST_UPDATE_SNAPSHOTS=" + updateValue, "VASEST_TEST_FILE=" + absoluteFile, "VASEST_SNAPSHOT_SCOPE=", "VASEST_SHUFFLE_SEED=" + shuffleText, "VASEST_REPORT_PATH=" + reportPath, "VASEST_SUITE_EXIT_PATH=" + reportPath + ".exit");
+  for (const value of repeatEnv) {
+    command.Env = append(command.Env, value);
+  }
+  if (coverageDirectory != "") {
+    command.Env = append(command.Env, "GOCOVERDIR=" + coverageDirectory);
+  }
+  return command.Run();
+}
+
+function discover(path: string): Result<string[]> {
+  const info = os.Stat(path)?;
+  if (!info.IsDir()) {
+    if (!strings.HasSuffix(path, ".test.km")) {
+      return fail(errors.New("test file must end in .test.km"));
+    }
+    if (!info.Mode().IsRegular()) {
+      return fail(errors.New("test file must be a regular file"));
+    }
+    return ok([path]);
+  }
+  return collect(path);
+}
+
+function watchRoots(path: string): Result<string[]> {
+  const directory = os.Getwd()?;
+  const absolute = filepath.Abs(path)?;
+  const relative = filepath.Rel(directory, absolute)?;
+  let roots = [directory];
+  if (relative == ".." || strings.HasPrefix(relative, ".." + string(os.PathSeparator)) || filepath.IsAbs(relative)) {
+    let root = absolute;
+    if (strings.HasSuffix(root, ".test.km")) {
+      root = filepath.Dir(root);
+    }
+    roots = append(roots, root);
+  }
+  return ok(roots);
+}
+
+function watchFile(path: string, includeSnapshots: boolean): boolean {
+  const name = filepath.Base(path);
+  return strings.HasSuffix(name, ".km") || strings.HasSuffix(name, ".go") || (includeSnapshots && strings.HasSuffix(name, ".snap")) || name == "go.mod" || name == "go.sum" || name == "kinmokusei.toml" || name == "kinmokusei.lock";
+}
+
+function regularFile(path: string): Result<boolean> {
+  const [info, statError] = os.Stat(path);
+  if (statError != nil) {
+    if (os.IsNotExist(statError)) {
+      return ok(false);
+    }
+    return fail(statError);
+  }
+  return ok(info.Mode().IsRegular());
+}
+
+function watchEntries(directory: string, includeSnapshots: boolean): Result<string[]> {
+  const [entries, readError] = os.ReadDir(directory);
+  if (readError != nil) {
+    if (os.IsNotExist(readError)) {
+      return ok([]);
+    }
+    return fail(readError);
+  }
+  let files: string[] = [];
+  for (const entry of entries) {
+    const path = filepath.Join(directory, entry.Name());
+    if (entry.IsDir()) {
+      if (skipDirectory(entry.Name()) || (!includeSnapshots && entry.Name() == "__snapshots__")) {
+        continue;
+      }
+      const nested = watchEntries(path, includeSnapshots)?;
+      files = append(files, nested...);
+    } else if (watchFile(path, includeSnapshots)) {
+      const regular = regularFile(path)?;
+      if (regular) {
+        files = append(files, path);
+      }
+    }
+  }
+  return ok(files);
+}
+
+function watchSignature(roots: string[], includeSnapshots: boolean): Result<string> {
+  const digest = sha256.New();
+  for (const root of roots) {
+    let files: string[] = [];
+    const [info, statError] = os.Stat(root);
+    if (statError == nil && info.Mode().IsRegular() && strings.HasSuffix(root, ".json")) {
+      // Explicit configuration roots are tracked even outside the project.
+      files = append(files, root);
+    } else {
+      const entries = watchEntries(root, includeSnapshots)?;
+      files = entries;
+    }
+    for (const file of files) {
+      const [data, readError] = os.ReadFile(file);
+      if (readError != nil) {
+        // An editor's atomic save or a directory deletion may race a scan.
+        if (os.IsNotExist(readError)) {
+          continue;
+        }
+        return fail(readError);
+      }
+      const content = sha256.Sum256(data);
+      fmt.Fprintf(digest, "%q:%x\n", file, content);
+    }
+  }
+  return ok(fmt.Sprintf("%x", digest.Sum(nil)));
+}
+
+class WatchChanges {
+  private previous: string;
+  private pending: boolean;
+
+  constructor(signature: string) {
+    this.previous = signature;
+    this.pending = false;
+  }
+
+  public function ready(signature: string): boolean {
+    if (signature != this.previous) {
+      this.previous = signature;
+      this.pending = true;
+      return false;
+    }
+    if (this.pending) {
+      this.pending = false;
+      return true;
+    }
+    return false;
+  }
+}
+
+function watchLoop(ctx: context.Context, roots: string[], interval: time.Duration, includeSnapshots: boolean, execute: () => int, announce: (iteration: int) => void): int {
+  return watchLoopWithSignature(ctx, interval, (): Result<string> => {
+    return watchSignature(roots, includeSnapshots);
+  }, execute, announce);
+}
+
+function watchLoopWithSignature(ctx: context.Context, interval: time.Duration, signature: () => Result<string>, execute: () => int, announce: (iteration: int) => void): int {
+  const [initial, initialError] = signature();
+  if (initialError != nil) {
+    fmt.Fprintln(os.Stderr, "watch error:", initialError.Error());
+    return 2;
+  }
+  const changes = new WatchChanges(initial);
+  let ready = true;
+  let iteration = 0;
+  let status = 0;
+  const ticker = time.NewTicker(interval);
+  defer ticker.Stop();
+  while (true) {
+    if (ctx.Err() != nil) {
+      return status;
+    }
+    if (ready) {
+      ready = false;
+      iteration++;
+      announce(iteration);
+      status = execute();
+    }
+    select {
+      case <-ctx.Done() {
+        return status;
+      }
+      case <-ticker.C {
+        const [current, scanError] = signature();
+        if (scanError != nil) {
+          fmt.Fprintln(os.Stderr, "watch error:", scanError.Error());
+          return 2;
+        }
+        // Wait for a second identical scan before starting another run.
+        ready = changes.ready(current);
+      }
+    }
+  }
+  return status;
+}
+
+function collect(directory: string): Result<string[]> {
+  let found: string[] = [];
+  const entries = os.ReadDir(directory)?;
+  for (const entry of entries) {
+    const path = filepath.Join(directory, entry.Name());
+    if (entry.IsDir()) {
+      if (skipDirectory(entry.Name())) {
+        continue;
+      }
+      const nested = collect(path)?;
+      found = append(found, nested...);
+    } else if (strings.HasSuffix(entry.Name(), ".test.km")) {
+      const regular = regularFile(path)?;
+      if (regular) {
+        found = append(found, path);
+      }
+    }
+  }
+  return ok(found);
+}
+
+function skipDirectory(name: string): boolean {
+  return strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" || name == "build" || name == "dist";
+}

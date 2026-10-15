@@ -1,0 +1,36 @@
+import { Suite, expectJSONSnapshot, expectSnapshot, runSuiteAndExit } from "vasest";
+import go os from "os";
+
+struct SnapshotValue {
+  public title: string;
+  public enabled: boolean;
+  public tags: string[];
+}
+
+function main(): void {
+  runSuiteAndExit("snapshot cases", (suite: Suite): void => {
+    suite.test("records text", (): void => {
+      let variant = os.Getenv("VASEST_SNAPSHOT_VARIANT");
+      if (variant == "") {
+        variant = "stable";
+      }
+      expectSnapshot("greeting / 金木犀", "hello\n" + variant);
+    });
+    suite.test("records multiline text", (): void => {
+      expectSnapshot("multiline", "first\nsecond\n");
+    });
+    suite.test("records structured JSON", (): void => {
+      let variant = os.Getenv("VASEST_JSON_VARIANT");
+      if (variant == "") {
+        variant = "stable";
+      }
+      expectJSONSnapshot("structured", SnapshotValue { title: variant, enabled: true, tags: ["金木犀", "test"] });
+    });
+    suite.test("first use of a shared name", (): void => {
+      expectSnapshot("shared name", "first value");
+    });
+    suite.test("second use of a shared name", (): void => {
+      expectSnapshot("shared name", "second value");
+    });
+  });
+}

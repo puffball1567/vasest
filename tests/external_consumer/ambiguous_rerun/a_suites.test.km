@@ -1,0 +1,48 @@
+import { Suite, FixtureSuite, TestContext, expect, withTestLocation } from "vasest";
+import go fmt from "fmt";
+import go os from "os";
+
+function main(): void {
+  const sharedName = "金木犀 <&> suite";
+  let failedName = sharedName;
+  if (os.Getenv("VASEST_AMBIGUOUS_UNIQUE") == "1") {
+    failedName = "unique failed suite";
+  }
+  let caseName = "case <&>";
+  if (os.Getenv("VASEST_AMBIGUOUS_RENAMED") == "1") {
+    caseName = "renamed failing case";
+  }
+  const failing = new Suite(failedName);
+  failing.beforeAll((): void => { fmt.Println("ambiguous-failed-setup"); });
+  failing.afterEach((): void => { fmt.Println("ambiguous-failed-cleanup"); });
+  failing.test(caseName, (): void => {
+    fmt.Println("ambiguous-failed-body", caseName);
+    if (os.Getenv("VASEST_AMBIGUOUS_FIXED") != "1") {
+      withTestLocation("domain-check.km", 42, (): void => { expect<int>(1).toEqual(2); });
+    }
+  });
+  const shared = new FixtureSuite<int>(sharedName, (context: TestContext): int => {
+    fmt.Println("ambiguous-shared-setup");
+    context.cleanup((): void => { fmt.Println("ambiguous-shared-cleanup"); });
+    return 42;
+  });
+  shared.test("case <&>", (value: int, context: TestContext): void => {
+    expect<int>(value).toEqual(42);
+    fmt.Println("ambiguous-shared-body");
+  });
+  const duplicate = new Suite(sharedName);
+  duplicate.test("other passing case", (): void => { fmt.Println("ambiguous-duplicate-body"); });
+  if (os.Getenv("VASEST_AMBIGUOUS_REVERSED") == "1") {
+    shared.run();
+    duplicate.run();
+    failing.run();
+  } else {
+    failing.run();
+    shared.run();
+    duplicate.run();
+  }
+  const unrelated = new Suite("unrelated suite");
+  unrelated.beforeAll((): void => { fmt.Println("ambiguous-unrelated-setup"); });
+  unrelated.test("unrelated passing case", (): void => { fmt.Println("ambiguous-unrelated-body"); });
+  unrelated.runAndExit();
+}

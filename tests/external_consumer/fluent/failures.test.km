@@ -1,0 +1,35 @@
+import { Suite, TestContext, expect, expectSlice, expectString } from "vasest";
+import go fmt from "fmt";
+
+function main(): void {
+  const suite = new Suite("fluent failures");
+  suite.afterEach((): void => { fmt.Println("fluent-afterEach"); });
+  suite.testWithContext("deep equality", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("fluent-cleanup"); });
+    expect("first\nactual").toEqual("first\nexpected");
+  });
+  suite.test("negated equality", (): void => { expect(1).not.toEqual(1); });
+  suite.test("identity", (): void => { expect(1).toBe(2); });
+  suite.test("negated identity", (): void => { expect(true).not.toBe(true); });
+  suite.test("invalid identity", (): void => { expect([1]).not.toBe([2]); });
+  suite.test("nil", (): void => { expect(false).toBeNil(); });
+  suite.test("negated nil", (): void => {
+    let empty: error = nil;
+    expect(empty).not.toBeNil();
+  });
+  suite.test("string containment", (): void => { expectString("actual").toContain("missing"); });
+  suite.test("negated string containment", (): void => { expectString("actual").not.toContain("actual"); });
+  suite.test("string pattern", (): void => { expectString("actual").toMatch("^missing$"); });
+  suite.test("invalid negated string pattern", (): void => { expectString("actual").not.toMatch("["); });
+  suite.test("string length", (): void => { expectString("金木犀").toHaveLength(3); });
+  suite.test("negated string length", (): void => { expectString("金木犀").not.toHaveLength(9); });
+  suite.test("slice containment", (): void => { expectSlice<int>([1]).toContain(2); });
+  suite.test("negated slice containment", (): void => { expectSlice<int>([1]).not.toContain(1); });
+  suite.test("slice length", (): void => { expectSlice<int>([1]).toHaveLength(2); });
+  suite.test("invalid negated slice length", (): void => { expectSlice<int>([1]).not.toHaveLength(-1); });
+  suite.test("later case", (): void => {
+    fmt.Println("fluent-later-case");
+    expect(42).toEqual(42);
+  });
+  suite.runAndExit();
+}

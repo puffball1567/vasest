@@ -1,0 +1,13 @@
+export function classify(value: int): int {
+  if (value > 0) {
+    return 1;
+  }
+  if (value < 0) {
+    return -1;
+  }
+  return 0;
+}
+
+export function unused(): int {
+  return 42;
+}

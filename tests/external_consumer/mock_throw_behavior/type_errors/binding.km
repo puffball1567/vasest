@@ -1,0 +1,2 @@
+import { MockAction } from "vasest";
+function main(): void { const mock = new MockAction<int>((value: int): void => {}); const configure: (exception: int) => void = mock.throwError; configure(42); }

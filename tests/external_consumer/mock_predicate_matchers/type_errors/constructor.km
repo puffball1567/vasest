@@ -1,0 +1,5 @@
+import { MockAction, MockExpectation, expectMock } from "vasest";
+type UserID = distinct int64;
+function main(): void {
+  const mock = new MockAction<UserID>((value: UserID): void => {}); new MockExpectation<UserID>(mock).not.toHaveBeenNthCalledSatisfying(1, (value: int64): boolean => { return true; });
+}

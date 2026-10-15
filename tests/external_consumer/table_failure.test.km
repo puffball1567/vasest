@@ -1,0 +1,21 @@
+import { Suite, expectEqual, runSuiteAndExit } from "vasest";
+
+struct Row {
+  name: string;
+  actual: int;
+  expected: int;
+}
+
+function main(): void {
+  runSuiteAndExit("matrix failures", (suite: Suite): void => {
+    suite.testEach([
+      Row { name: "first passes", actual: 1, expected: 1 },
+      Row { name: "middle fails", actual: 2, expected: 3 },
+      Row { name: "last still runs", actual: 4, expected: 4 },
+    ], (row: Row): string => {
+      return row.name;
+    }, (row: Row): void => {
+      expectEqual(row.actual, row.expected);
+    });
+  });
+}

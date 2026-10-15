@@ -1,0 +1,2 @@
+import { MockAction, expectMock } from "vasest";
+function main(): void { const mock = new MockAction<int>((value: int): void => {}); expectMock<int>(mock).toHaveBeenCalledWith("42"); }

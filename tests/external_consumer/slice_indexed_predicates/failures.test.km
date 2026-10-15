@@ -1,0 +1,40 @@
+import { Suite, TestContext, expectSlice, withTestLocation } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+import go os from "os";
+
+function main(): void {
+  const suite = new Suite("slice indexed predicate failures");
+  const values: int[] = [1, 2, 3];
+  const empty: int[] = [];
+  suite.afterEach((): void => { fmt.Println("slice-indexed-predicate-afterEach"); });
+  suite.testWithContext("any mismatch", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("slice-indexed-predicate-cleanup"); });
+    expectSlice<int>(values).toSatisfyAnyIndexed((value: int, index: int): boolean => { return value < 0; });
+  });
+  suite.test("all mismatch", (): void => { expectSlice(values).toSatisfyAllIndexed((value: int, index: int): boolean => { return value < 3; }); });
+  suite.test("negated any mismatch", (): void => { expectSlice(values).not.toSatisfyAnyIndexed((value: int, index: int): boolean => { return value == 2; }); });
+  suite.test("negated all mismatch", (): void => {
+    if (os.Getenv("VASEST_INDEXED_PREDICATE_FIXED") == "1") {
+      expectSlice<int>(values).not.toSatisfyAllIndexed((value: int, index: int): boolean => { return index < 2; });
+      fmt.Println("slice-indexed-predicate-fixed");
+    } else {
+      expectSlice<int>(values).not.toSatisfyAllIndexed((value: int, index: int): boolean => { return value > 0; });
+    }
+  });
+  suite.test("nil any predicate", (): void => { expectSlice<int>(empty).toSatisfyAnyIndexed(nil); });
+  suite.test("negated nil any predicate", (): void => { expectSlice<int>(empty).not.toSatisfyAnyIndexed(nil); });
+  suite.test("nil all predicate", (): void => { expectSlice<int>(empty).toSatisfyAllIndexed(nil); });
+  suite.test("negated nil all predicate", (): void => { expectSlice<int>(empty).not.toSatisfyAllIndexed(nil); });
+  suite.test("thrown predicate", (): void => {
+    expectSlice<int>(values).not.toSatisfyAnyIndexed((value: int, index: int): boolean => { throw errors.New("predicate callback failed"); });
+  });
+  suite.test("explicit callback location", (): void => {
+    expectSlice<int>(values).toSatisfyAllIndexed((value: int, index: int): boolean => {
+      withTestLocation("domain-check.km", 42, (): void => { throw errors.New("domain predicate failed"); });
+      return true;
+    });
+  });
+  suite.test("later case", (): void => { fmt.Println("slice-indexed-predicate-failing-later"); });
+  suite.runAndExit();
+}

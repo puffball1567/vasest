@@ -1,0 +1,141 @@
+import { Suite, TestContext, MockAction, MockFn, MockOutcomeExpectation, NegatedMockOutcomeExpectation, MockOutcomeSource, MockOutcomeResult, expectMockOutcome, expectFunction, expect, skipTest } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+import go os from "os";
+
+type ErrorCode = distinct int64;
+class DomainError implements error {
+  public code: ErrorCode;
+  public reads: int;
+  constructor(code: ErrorCode) { this.code = code; this.reads = 0; }
+  public function Error(): string { this.reads++; throw errors.New("unexpected Error call"); }
+  public function String(): string { return "domain"; }
+}
+class Outcomes implements MockOutcomeSource {
+  public reads: int;
+  public values: MockOutcomeResult[];
+  constructor(values: MockOutcomeResult[]) { this.reads = 0; this.values = values; }
+  public function outcomes(): MockOutcomeResult[] { this.reads++; return this.values; }
+}
+
+function main(): void {
+  const suite = new Suite("typed mock throw predicates");
+  suite.test("explicit inferred bindings constructors and queues", (): void => {
+    const original = new DomainError(ErrorCode(1152921504606846977));
+    let bodies = 0;
+    let predicates = 0;
+    const mock = new MockAction<int>((value: int): void => { bodies++; });
+    mock.implementOnce((value: int): void => { throw original; });
+    const matcher: MockOutcomeExpectation = expectMockOutcome(mock);
+    const predicate: (value: DomainError) => boolean = (value: DomainError): boolean => { predicates++; return value == original && value.code == ErrorCode(1152921504606846977); };
+    matcher.not.toHaveThrownTypeSatisfying<DomainError>(predicate);
+    matcher.not.toHaveNthThrownTypeSatisfying<DomainError>(1, predicate);
+    matcher.not.toHaveLastThrownTypeSatisfying<DomainError>(predicate);
+    expect(predicates).toEqual(0); expect(bodies).toEqual(0);
+    expectFunction((): void => { mock.invoke(1); }).toThrow();
+    matcher.toHaveThrownTypeSatisfying<DomainError>(predicate);
+    matcher.toHaveNthThrownTypeSatisfying(1, predicate);
+    matcher.toHaveLastThrownTypeSatisfying(predicate);
+    new MockOutcomeExpectation(mock).toHaveThrownTypeSatisfying<DomainError>(predicate);
+    new NegatedMockOutcomeExpectation(mock).toHaveLastThrownTypeSatisfying<DomainError>((value: DomainError): boolean => { predicates++; return false; });
+    expect(predicates).toEqual(5); expect(original.reads).toEqual(0);
+    mock.invoke(2); expect(bodies).toEqual(1);
+    matcher.not.toHaveLastThrownTypeSatisfying<DomainError>((value: DomainError): boolean => { fmt.Println("unreachable-return-predicate"); return true; });
+  });
+  suite.test("any short circuit one snapshot and invocation indices", (): void => {
+    const first = new DomainError(ErrorCode(1));
+    const second = new DomainError(ErrorCode(2));
+    const third = new DomainError(ErrorCode(3));
+    const source = new Outcomes([
+      MockOutcomeResult { status: "throw", exception: errors.New("other type") },
+      MockOutcomeResult { status: "return", exception: third },
+      MockOutcomeResult { status: "throw", exception: first },
+      MockOutcomeResult { status: "throw", exception: second },
+      MockOutcomeResult { status: "throw", exception: third }
+    ]);
+    let visited: ErrorCode[] = [];
+    const matcher = expectMockOutcome(source);
+    matcher.toHaveThrownTypeSatisfying<DomainError>((value: DomainError): boolean => { visited = append(visited, value.code); return value == second; });
+    expect(source.reads).toEqual(1); expect(visited).toEqual([ErrorCode(1), ErrorCode(2)]);
+    matcher.toHaveNthThrownTypeSatisfying<DomainError>(4, (value: DomainError): boolean => { return value == second; });
+    matcher.toHaveLastThrownTypeSatisfying<DomainError>((value: DomainError): boolean => { return value == third; });
+    matcher.not.toHaveNthThrownTypeSatisfying<DomainError>(2, (value: DomainError): boolean => { fmt.Println("unreachable-nonthrow-predicate"); return true; });
+    matcher.not.toHaveThrownTypeSatisfying<DomainError>((value: DomainError): boolean => { return value.code > ErrorCode(10); });
+  });
+  suite.test("native references and mismatch diagnostics", (): void => {
+    const original = new DomainError(ErrorCode(1));
+    const mock = new MockAction<int>((value: int): void => { throw original; });
+    expectFunction((): void => { mock.invoke(1); }).toThrow();
+    const matcher = expectMockOutcome(mock);
+    matcher.toHaveLastThrownTypeSatisfying<DomainError>((value: DomainError): boolean => { value.code = ErrorCode(1152921504606846978); return true; });
+    matcher.toHaveNthThrownTypeSatisfying<DomainError>(1, (value: DomainError): boolean => { return value.code == ErrorCode(1152921504606846978); });
+    expectFunction((): void => { matcher.toHaveThrownTypeSatisfying<DomainError>((value: DomainError): boolean => { return false; }); }).toThrowMessage("satisfying predicate");
+    expectFunction((): void => { matcher.not.toHaveLastThrownTypeSatisfying<DomainError>((value: DomainError): boolean => { return true; }); }).toThrowMessage("not to have thrown");
+    expect(original.reads).toEqual(0);
+  });
+  suite.test("returned errors typed nil and nil throw", (): void => {
+    const original = new DomainError(ErrorCode(42));
+    const mock = new MockFn<int, error>((value: int): error => { return original; });
+    mock.invoke(1);
+    const matcher = expectMockOutcome(mock);
+    matcher.not.toHaveThrownTypeSatisfying<DomainError>((value: DomainError): boolean => { fmt.Println("unreachable-returned-error-predicate"); return true; });
+    const typedNil: DomainError = nil;
+    mock.implementOnce((value: int): error => { throw typedNil; });
+    expectFunction((): void => { mock.invoke(2); }).toThrow();
+    matcher.toHaveLastThrownTypeSatisfying<DomainError>((value: DomainError): boolean => { return value == nil; });
+    const missing: error = nil;
+    mock.implementOnce((value: int): error => { throw missing; });
+    expectFunction((): void => { mock.invoke(3); }).toThrow();
+    matcher.not.toHaveLastThrownTypeSatisfying<error>((value: error): boolean => { fmt.Println("unreachable-nil-error-predicate"); return true; });
+  });
+  suite.test("native chains interfaces and first selected type", (): void => {
+    const first = new DomainError(ErrorCode(1));
+    const second = new DomainError(ErrorCode(2));
+    const mock = new MockAction<int>((value: int): void => { throw errors.Join(first, second); });
+    expectFunction((): void => { mock.invoke(1); }).toThrow();
+    const matcher = expectMockOutcome(mock);
+    matcher.toHaveLastThrownTypeSatisfying<fmt.Stringer>((value: fmt.Stringer): boolean => { return value.String() == "domain"; });
+    matcher.not.toHaveThrownTypeSatisfying<DomainError>((value: DomainError): boolean => { return value == second; });
+    const path = os.PathError { Op: "open", Path: "missing", Err: os.ErrNotExist };
+    mock.implementOnce((value: int): void => { throw fmt.Errorf("load: %w", &path); });
+    expectFunction((): void => { mock.invoke(2); }).toThrow();
+    matcher.toHaveLastThrownTypeSatisfying<*os.PathError>((value: *os.PathError): boolean => { return value == &path && value.Path == "missing"; });
+  });
+  suite.test("callback clear and invoke retain selected snapshot", (): void => {
+    const first = new DomainError(ErrorCode(1));
+    const second = new DomainError(ErrorCode(2));
+    const mock = new MockAction<int>((value: int): void => {});
+    mock.implementOnce((value: int): void => { throw first; });
+    mock.implementOnce((value: int): void => { throw second; });
+    expectFunction((): void => { mock.invoke(1); }).toThrow();
+    expectFunction((): void => { mock.invoke(2); }).toThrow();
+    const matcher = expectMockOutcome(mock);
+    let visited: ErrorCode[] = [];
+    matcher.not.toHaveThrownTypeSatisfying<DomainError>((value: DomainError): boolean => { visited = append(visited, value.code); mock.clearCalls(); mock.invoke(3); return false; });
+    expect(visited).toEqual([ErrorCode(1), ErrorCode(2)]);
+    matcher.not.toHaveLastThrownTypeSatisfying<DomainError>((value: DomainError): boolean => { fmt.Println("unreachable-new-return-predicate"); return true; });
+  });
+  suite.testWithContext("any predicate skip", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("mock-type-predicate-skip-cleanup"); });
+    const mock = new MockAction<int>((value: int): void => { throw errors.New("body"); });
+    expectFunction((): void => { mock.invoke(1); }).toThrow();
+    expectMockOutcome(mock).toHaveThrownTypeSatisfying<error>((value: error): boolean => { skipTest("predicate unavailable"); return false; });
+    fmt.Println("unreachable-any-skip");
+  });
+  suite.testWithContext("negative nth predicate skip", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("mock-type-predicate-skip-cleanup"); });
+    const mock = new MockAction<int>((value: int): void => { throw errors.New("body"); });
+    expectFunction((): void => { mock.invoke(1); }).toThrow();
+    expectMockOutcome(mock).not.toHaveNthThrownTypeSatisfying<error>(1, (value: error): boolean => { skipTest("predicate unavailable"); return true; });
+    fmt.Println("unreachable-nth-skip");
+  });
+  suite.testWithContext("last predicate skip", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("mock-type-predicate-skip-cleanup"); });
+    const mock = new MockAction<int>((value: int): void => { throw errors.New("body"); });
+    expectFunction((): void => { mock.invoke(1); }).toThrow();
+    expectMockOutcome(mock).toHaveLastThrownTypeSatisfying<error>((value: error): boolean => { skipTest("predicate unavailable"); return false; });
+    fmt.Println("unreachable-last-skip");
+  });
+  suite.test("later case", (): void => { fmt.Println("mock-type-predicate-passing-later"); });
+  suite.runAndExit();
+}

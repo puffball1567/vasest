@@ -1,0 +1,29 @@
+import { Suite, TestContext, expectMap, withTestLocation } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+
+function main(): void {
+  const suite = new Suite("map predicate failures");
+  const values: Map<string, int> = makeMap[string, int]();
+  values["value"] = 42;
+  suite.afterEach((): void => { fmt.Println("map-predicate-afterEach"); });
+  suite.testWithContext("positive mismatch", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("map-predicate-cleanup"); });
+    expectMap<string, int>(values).toHaveEntrySatisfying("value", (value: int): boolean => { return value < 0; });
+  });
+  suite.test("negated mismatch", (): void => { expectMap(values).not.toHaveEntrySatisfying("value", (value: int): boolean => { return value > 0; }); });
+  suite.test("missing key", (): void => { expectMap(values).toHaveEntrySatisfying("absent", (value: int): boolean => { return true; }); });
+  suite.test("nil predicate", (): void => { expectMap<string, int>(values).toHaveEntrySatisfying("value", nil); });
+  suite.test("negated nil predicate", (): void => { expectMap<string, int>(values).not.toHaveEntrySatisfying("absent", nil); });
+  suite.test("thrown predicate", (): void => {
+    expectMap<string, int>(values).not.toHaveEntrySatisfying("value", (value: int): boolean => { throw errors.New("predicate callback failed"); });
+  });
+  suite.test("explicit callback location", (): void => {
+    expectMap<string, int>(values).toHaveEntrySatisfying("value", (value: int): boolean => {
+      withTestLocation("domain-check.km", 42, (): void => { throw errors.New("domain predicate failed"); });
+      return true;
+    });
+  });
+  suite.test("later case", (): void => { fmt.Println("map-predicate-failing-later"); });
+  suite.runAndExit();
+}

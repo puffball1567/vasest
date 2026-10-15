@@ -1,0 +1,34 @@
+import { Suite, TestContext, FunctionExpectation, expectFunction, withTestLocation } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+
+function main(): void {
+  const suite = new Suite("function throw predicate failures");
+  suite.afterEach((): void => { fmt.Println("function-throw-predicate-afterEach"); });
+  const body: () => void = (): void => { throw errors.New("body outcome"); };
+  const matches: (exception: error) => boolean = (exception: error): boolean => { return true; };
+  suite.testWithContext("positive predicate mismatch", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("function-throw-predicate-cleanup"); });
+    expectFunction(body).toThrowSatisfying((exception: error): boolean => { return false; });
+  });
+  suite.test("negated predicate match", (): void => { new FunctionExpectation(body).not.toThrowSatisfying(matches); });
+  suite.test("normal return requires throw", (): void => {
+    expectFunction((): void => {}).toThrowSatisfying((exception: error): boolean => { fmt.Println("unreachable-normal-predicate"); return true; });
+  });
+  suite.test("nil positive predicate", (): void => {
+    expectFunction((): void => { fmt.Println("unreachable-invalid-predicate-body"); }).toThrowSatisfying(nil);
+  });
+  suite.test("nil negative predicate", (): void => {
+    expectFunction((): void => { fmt.Println("unreachable-invalid-negative-body"); }).not.toThrowSatisfying(nil);
+  });
+  suite.test("nil positive body", (): void => { expectFunction(nil).toThrowSatisfying(matches); });
+  suite.test("nil negative body", (): void => { expectFunction(nil).not.toThrowSatisfying(matches); });
+  suite.test("raw predicate throw", (): void => {
+    expectFunction(body).toThrowSatisfying((exception: error): boolean => { throw errors.New("predicate failed"); });
+  });
+  suite.test("explicit predicate location", (): void => {
+    expectFunction(body).not.toThrowSatisfying((exception: error): boolean => { withTestLocation("predicate.km", 42, (): void => { throw errors.New("predicate failed explicitly"); }); return false; });
+  });
+  suite.test("later case", (): void => { fmt.Println("function-throw-predicate-failing-later"); });
+  suite.runAndExit();
+}

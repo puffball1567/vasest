@@ -1,0 +1,51 @@
+import { Suite, TestContext, MockFn, MockReturnSource, expectMockReturn, expectFunction, withTestLocation } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+
+function main(): void {
+  const suite = new Suite("mock return predicate failures");
+  const action = new MockFn<int, int>((value: int): int => { return value; });
+  action.invoke(42);
+  const empty = new MockFn<int, int>((value: int): int => { return value; });
+  suite.afterEach((): void => { fmt.Println("return-predicate-afterEach"); });
+  suite.testWithContext("any mismatch", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("return-predicate-cleanup"); });
+    expectMockReturn<int>(action).toHaveReturnedSatisfying((value: int): boolean => { return value < 0; });
+  });
+  suite.test("nth mismatch", (): void => { expectMockReturn(action).toHaveNthReturnedSatisfying(1, (value: int): boolean => { return value < 0; }); });
+  suite.test("last mismatch", (): void => { expectMockReturn(action).toHaveLastReturnedSatisfying((value: int): boolean => { return value < 0; }); });
+  suite.test("negated any mismatch", (): void => { expectMockReturn(action).not.toHaveReturnedSatisfying((value: int): boolean => { return value > 0; }); });
+  suite.test("negated nth mismatch", (): void => { expectMockReturn(action).not.toHaveNthReturnedSatisfying(1, (value: int): boolean => { return value > 0; }); });
+  suite.test("negated last mismatch", (): void => { expectMockReturn(action).not.toHaveLastReturnedSatisfying((value: int): boolean => { return value > 0; }); });
+  suite.test("nil any predicate", (): void => { expectMockReturn(action).toHaveReturnedSatisfying(nil); });
+  suite.test("nil nth predicate", (): void => { expectMockReturn(action).toHaveNthReturnedSatisfying(1, nil); });
+  suite.test("nil last predicate", (): void => { expectMockReturn(action).toHaveLastReturnedSatisfying(nil); });
+  suite.test("negated nil any predicate", (): void => { expectMockReturn(action).not.toHaveReturnedSatisfying(nil); });
+  suite.test("negated nil nth predicate", (): void => { expectMockReturn(action).not.toHaveNthReturnedSatisfying(1, nil); });
+  suite.test("negated nil last predicate", (): void => { expectMockReturn(action).not.toHaveLastReturnedSatisfying(nil); });
+  suite.test("invalid index", (): void => { expectMockReturn(action).toHaveNthReturnedSatisfying(0, (value: int): boolean => { return true; }); });
+  suite.test("negated invalid index", (): void => { expectMockReturn(action).not.toHaveNthReturnedSatisfying(-1, (value: int): boolean => { return true; }); });
+  suite.test("missing nth", (): void => { expectMockReturn(action).toHaveNthReturnedSatisfying(2, (value: int): boolean => { return true; }); });
+  suite.test("missing last", (): void => { expectMockReturn(empty).toHaveLastReturnedSatisfying((value: int): boolean => { return true; }); });
+  suite.test("nil source", (): void => { const source: MockReturnSource<int> = nil; expectMockReturn<int>(source).toHaveReturnedSatisfying((value: int): boolean => { return true; }); });
+  suite.test("typed nil source", (): void => { const source: MockFn<int, int> = nil; expectMockReturn<int>(source).not.toHaveLastReturnedSatisfying((value: int): boolean => { return false; }); });
+  suite.test("thrown predicate", (): void => { expectMockReturn(action).not.toHaveReturnedSatisfying((value: int): boolean => { throw errors.New("predicate callback failed"); }); });
+  suite.test("explicit callback location", (): void => {
+    expectMockReturn(action).toHaveNthReturnedSatisfying(1, (value: int): boolean => {
+      withTestLocation("domain-check.km", 42, (): void => { throw errors.New("domain predicate failed"); });
+      return true;
+    });
+  });
+  suite.test("throwing nth", (): void => {
+    const thrown = new MockFn<int, int>((value: int): int => { throw errors.New("mock threw"); });
+    expectFunction((): void => { thrown.invoke(1); }).toThrow();
+    expectMockReturn<int>(thrown).toHaveNthReturnedSatisfying(1, (value: int): boolean => { return true; });
+  });
+  suite.test("throwing last", (): void => {
+    const thrown = new MockFn<int, int>((value: int): int => { throw errors.New("mock threw"); });
+    expectFunction((): void => { thrown.invoke(1); }).toThrow();
+    expectMockReturn<int>(thrown).toHaveLastReturnedSatisfying((value: int): boolean => { return true; });
+  });
+  suite.test("later case", (): void => { fmt.Println("return-predicate-failing-later"); });
+  suite.runAndExit();
+}

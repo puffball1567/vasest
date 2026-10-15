@@ -1,0 +1,17 @@
+import { Suite, TestContext, MockAction, expectMock } from "vasest";
+import go fmt from "fmt";
+import go reflect from "reflect";
+
+function main(): void {
+  const action = new MockAction<int>((value: int): void => {});
+  action.invoke(42);
+  const suite = new Suite("mock predicate native panic");
+  suite.afterEach((): void => { fmt.Println("mock-predicate-panic-afterEach"); });
+  suite.afterAll((): void => { fmt.Println("mock-predicate-panic-afterAll"); });
+  suite.testWithContext("native predicate panic", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("mock-predicate-panic-cleanup"); });
+    expectMock<int>(action).toHaveBeenCalledSatisfying((value: int): boolean => { reflect.ValueOf(value).Index(0); return false; });
+  });
+  suite.test("later case", (): void => { fmt.Println("unreachable-mock-predicate-panic-later"); });
+  suite.runAndExit();
+}

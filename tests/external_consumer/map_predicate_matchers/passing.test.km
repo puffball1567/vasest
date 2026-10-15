@@ -1,0 +1,94 @@
+import { Suite, TestContext, MapExpectation, expectMap, expect, skipTest } from "vasest";
+import go fmt from "fmt";
+
+type UserID = distinct int64;
+type Score = distinct int64;
+
+class Record {
+  public value: int;
+  constructor(value: int) { this.value = value; }
+}
+
+function main(): void {
+  const suite = new Suite("typed map predicate matchers");
+  suite.test("explicit native key and value types with inference fallback", (): void => {
+    const id = UserID(1152921504606846977);
+    const score = Score(1152921504606846978);
+    const values: Map<UserID, Score> = makeMap[UserID, Score]();
+    values[id] = score;
+    let calls = 0;
+    const isScore: (value: Score) => boolean = (value: Score): boolean => { calls++; return value == score; };
+    const matcher: MapExpectation<UserID, Score> = expectMap<UserID, Score>(values);
+    expect(calls).toEqual(0);
+    matcher.toHaveEntrySatisfying(id, isScore);
+    new MapExpectation<UserID, Score>(values).toHaveEntrySatisfying(id, isScore);
+    expectMap(values).toHaveEntrySatisfying(id, isScore);
+    expect(calls).toEqual(3);
+    matcher.not.toHaveEntrySatisfying(id, (value: Score): boolean => { return value < Score(0); });
+  });
+  suite.test("missing entries skip callbacks while zero values are checked", (): void => {
+    const missing: Map<string, int> = nil;
+    const empty: Map<string, int> = makeMap[string, int]();
+    let calls = 0;
+    const isZero: (value: int) => boolean = (value: int): boolean => { calls++; return value == 0; };
+    expectMap<string, int>(missing).not.toHaveEntrySatisfying("absent", isZero);
+    new MapExpectation<string, int>(empty).not.toHaveEntrySatisfying("absent", isZero);
+    expect(calls).toEqual(0);
+    empty["zero"] = 0;
+    expectMap<string, int>(empty).toHaveEntrySatisfying("zero", isZero);
+    expect(calls).toEqual(1);
+  });
+  suite.test("present nil and nested collection values retain native semantics", (): void => {
+    const values: Map<string, int[]> = makeMap[string, int[]]();
+    const empty: int[] = [];
+    values["nil"] = nil;
+    values["empty"] = empty;
+    values["nested"] = [42];
+    expectMap<string, int[]>(values).toHaveEntrySatisfying("nil", (value: int[]): boolean => { return value == nil; });
+    expectMap<string, int[]>(values).toHaveEntrySatisfying("empty", (value: int[]): boolean => { return value != nil && len(value) == 0; });
+    expectMap<string, int[]>(values).toHaveEntrySatisfying("nested", (value: int[]): boolean => { value[0]++; return true; });
+    const [nested, present] = values["nested"];
+    expect(present).toBe(true);
+    expect(nested[0]).toEqual(43);
+  });
+  suite.test("class keys retain identity and values retain references", (): void => {
+    const original = new Record(42);
+    const other = new Record(42);
+    const values: Map<Record, Record> = makeMap[Record, Record]();
+    values[original] = original;
+    expectMap<Record, Record>(values).toHaveEntrySatisfying(original, (value: Record): boolean => {
+      value.value++;
+      return value == original;
+    });
+    expect(original.value).toEqual(43);
+    let calls = 0;
+    expectMap<Record, Record>(values).not.toHaveEntrySatisfying(other, (value: Record): boolean => { calls++; return true; });
+    expect(calls).toEqual(0);
+  });
+  suite.test("saved matchers read live maps and select each value once", (): void => {
+    const values: Map<string, int> = makeMap[string, int]();
+    const matcher = expectMap<string, int>(values);
+    values["金木犀"] = 42;
+    let calls = 0;
+    matcher.toHaveEntrySatisfying("金木犀", (value: int): boolean => { calls++; values["金木犀"] = -1; return value == 42; });
+    matcher.not.toHaveEntrySatisfying("金木犀", (value: int): boolean => { calls++; values["金木犀"] = 42; return value > 0; });
+    expect(calls).toEqual(2);
+    matcher.toHaveEntrySatisfying("金木犀", (value: int): boolean => { return value == 42; });
+  });
+  suite.testWithContext("runtime skip propagates through negation", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("map-predicate-skip-cleanup"); });
+    const values: Map<string, int> = makeMap[string, int]();
+    values["value"] = 42;
+    expectMap(values).not.toHaveEntrySatisfying("value", (value: int): boolean => { skipTest("map predicate resource unavailable"); return false; });
+    fmt.Println("unreachable-map-predicate-skip");
+  });
+  suite.testWithContext("runtime skip propagates through positive matching", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("map-predicate-skip-cleanup"); });
+    const values: Map<string, int> = makeMap[string, int]();
+    values["value"] = 42;
+    expectMap<string, int>(values).toHaveEntrySatisfying("value", (value: int): boolean => { skipTest("map predicate resource unavailable"); return true; });
+    fmt.Println("unreachable-map-predicate-skip");
+  });
+  suite.test("later case", (): void => { fmt.Println("map-predicate-passing-later"); });
+  suite.runAndExit();
+}

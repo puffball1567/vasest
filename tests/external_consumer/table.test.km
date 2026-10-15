@@ -1,0 +1,25 @@
+import { Suite, expectEqual, runSuiteAndExit } from "vasest";
+
+struct Row {
+  name: string;
+  input: int;
+  expected: int;
+}
+
+function main(): void {
+  runSuiteAndExit("absolute value matrix", (suite: Suite): void => {
+    suite.testEach([
+      Row { name: "negative", input: -3, expected: 3 },
+      Row { name: "zero", input: 0, expected: 0 },
+      Row { name: "positive", input: 7, expected: 7 },
+    ], (row: Row): string => {
+      return row.name;
+    }, (row: Row): void => {
+      let actual = row.input;
+      if (actual < 0) {
+        actual = -actual;
+      }
+      expectEqual(actual, row.expected);
+    });
+  });
+}

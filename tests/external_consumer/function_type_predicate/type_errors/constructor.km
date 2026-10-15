@@ -1,0 +1,6 @@
+import { expectFunction, FunctionExpectation, NegatedFunctionExpectation } from "vasest";
+import go os from "os";
+function main(): void {
+  const matcher = expectFunction((): void => {});
+  new NegatedFunctionExpectation((): void => {}).toThrowTypeSatisfying<error>((exception: error): int => { return 1; });
+}

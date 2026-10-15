@@ -1,0 +1,10 @@
+import { Suite, expectTrue } from "vasest";
+import go fmt from "fmt";
+
+function main(): void {
+  const suite = new Suite("forgotten suite");
+  suite.test("would fail if executed", (): void => {
+    expectTrue(false);
+  });
+  fmt.Println("main returned without running the suite");
+}

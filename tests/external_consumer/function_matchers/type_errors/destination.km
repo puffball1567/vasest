@@ -1,0 +1,6 @@
+import { expectFunction } from "vasest";
+import go os from "os";
+function main(): void {
+  let wrong = 0;
+  expectFunction((): void => {}).toThrowType<*os.PathError>(&wrong);
+}

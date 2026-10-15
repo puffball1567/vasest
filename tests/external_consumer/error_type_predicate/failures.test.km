@@ -1,0 +1,28 @@
+import { Suite, TestContext, expectErrorValue, withTestLocation } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+import go os from "os";
+
+function main(): void {
+  const suite = new Suite("error type predicate failures");
+  const actual = errors.New("actual");
+  suite.afterEach((): void => { fmt.Println("error-type-predicate-afterEach"); });
+  suite.testWithContext("positive predicate mismatch", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("error-type-predicate-cleanup"); });
+    expectErrorValue(actual).toMatchTypeSatisfying<error>((value: error): boolean => { return false; });
+  });
+  suite.test("negated predicate match", (): void => { expectErrorValue(actual).not.toMatchTypeSatisfying<error>((value: error): boolean => { return true; }); });
+  suite.test("missing positive type", (): void => {
+    expectErrorValue(actual).toMatchTypeSatisfying<*os.PathError>((value: *os.PathError): boolean => { fmt.Println("unreachable-missing-positive-predicate"); return true; });
+  });
+  suite.test("nil positive predicate", (): void => { expectErrorValue(nil).toMatchTypeSatisfying<error>(nil); });
+  suite.test("nil negative predicate", (): void => { expectErrorValue(nil).not.toMatchTypeSatisfying<error>(nil); });
+  suite.test("invalid positive type", (): void => { expectErrorValue(nil).toMatchTypeSatisfying<int>((value: int): boolean => { fmt.Println("unreachable-invalid-positive-predicate"); return true; }); });
+  suite.test("invalid negative type", (): void => { expectErrorValue(nil).not.toMatchTypeSatisfying<int>((value: int): boolean => { fmt.Println("unreachable-invalid-negative-predicate"); return false; }); });
+  suite.test("raw predicate throw", (): void => { expectErrorValue(actual).toMatchTypeSatisfying<error>((value: error): boolean => { throw errors.New("predicate failed"); }); });
+  suite.test("explicit predicate location", (): void => {
+    expectErrorValue(actual).not.toMatchTypeSatisfying<error>((value: error): boolean => { withTestLocation("predicate.km", 42, (): void => { throw errors.New("predicate failed explicitly"); }); return false; });
+  });
+  suite.test("later case", (): void => { fmt.Println("error-type-predicate-failing-later"); });
+  suite.runAndExit();
+}

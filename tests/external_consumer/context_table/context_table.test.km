@@ -1,0 +1,56 @@
+import { Suite, TestContext, expectEqual, expectNoError, expectTrue } from "vasest";
+import go os from "os";
+
+struct Row {
+  name: string;
+  actual: int;
+  expected: int;
+}
+
+function dataDirectory(context: TestContext): string {
+  return context.tempDir();
+}
+
+function main(): void {
+  const suite = new Suite("context matrix");
+  const [originalEnv, originallySet] = os.LookupEnv("VASEST_TABLE_FIXTURE");
+  let paths: string[] = [];
+  let activeName = "";
+  suite.beforeEach((): void => {
+    const [value, existed] = os.LookupEnv("VASEST_TABLE_FIXTURE");
+    expectEqual(value, originalEnv);
+    expectEqual(existed, originallySet);
+    for (const path of paths) {
+      const [info, statError] = os.Stat(path);
+      expectTrue(os.IsNotExist(statError));
+    }
+  });
+  suite.afterEach((): void => {
+    expectEqual(os.Getenv("VASEST_TABLE_FIXTURE"), activeName);
+    const [info, statError] = os.Stat(paths[len(paths) - 1]);
+    expectNoError(statError);
+    expectTrue(info.IsDir());
+  });
+  suite.afterAll((): void => {
+    const [value, existed] = os.LookupEnv("VASEST_TABLE_FIXTURE");
+    expectEqual(value, originalEnv);
+    expectEqual(existed, originallySet);
+    for (const path of paths) {
+      const [info, statError] = os.Stat(path);
+      expectTrue(os.IsNotExist(statError));
+    }
+  });
+  suite.testEachWithContext([
+    Row { name: "first passes", actual: 1, expected: 1 },
+    Row { name: "middle fails", actual: 2, expected: 3 },
+    Row { name: "last still runs", actual: 4, expected: 4 },
+  ], (row: Row): string => {
+    return row.name;
+  }, (row: Row, context: TestContext): void => {
+    activeName = row.name;
+    paths = append(paths, dataDirectory(context));
+    context.setEnv("VASEST_TABLE_FIXTURE", row.name);
+    expectEqual(row.actual, row.expected);
+  });
+  suite.runAndExit();
+}

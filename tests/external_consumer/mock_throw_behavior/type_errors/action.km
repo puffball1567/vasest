@@ -1,0 +1,2 @@
+import { MockAction } from "vasest";
+function main(): void { new MockAction<int>((value: int): void => {}).throwError(true); }

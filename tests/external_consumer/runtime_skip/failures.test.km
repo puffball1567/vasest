@@ -1,0 +1,21 @@
+import { Suite, TestContext, expectThrows, fail, skipTest } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+
+function main(): void {
+  const suite = new Suite("skip cleanup failures");
+  suite.testWithContext("cleanup overrides skip", (context: TestContext): void => {
+    context.cleanup((): void => { fail("cleanup broke"); });
+    skipTest("optional dependency unavailable");
+  });
+  suite.test("invalid reason", (): void => { skipTest(" \t"); });
+  suite.test("joined failure", (): void => {
+    const skipped = expectThrows((): void => { skipTest("optional dependency unavailable"); });
+    throw errors.Join(skipped, errors.New("genuine failure"));
+  });
+  suite.testWithContext("cleanup cannot skip", (context: TestContext): void => {
+    context.cleanup((): void => { skipTest("invalid cleanup skip"); });
+  });
+  suite.test("later case", (): void => { fmt.Println("skip-failures-later-case"); });
+  suite.runAndExit();
+}

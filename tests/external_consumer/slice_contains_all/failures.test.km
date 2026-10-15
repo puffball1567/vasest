@@ -1,0 +1,38 @@
+import { Suite, TestContext, SliceExpectation, expectSlice, withTestLocation } from "vasest";
+import go fmt from "fmt";
+import go math from "math";
+
+function main(): void {
+  const suite = new Suite("slice containment failures");
+  suite.afterEach((): void => { fmt.Println("slice-containment-afterEach"); });
+  suite.testWithContext("different multiplicity", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("slice-containment-cleanup"); });
+    expectSlice<int>([1, 2, 2]).toContainAll([1, 1]);
+  });
+  suite.test("negated reordered inclusion", (): void => { new SliceExpectation<int>([1, 2, 3]).not.toContainAll([2, 1]); });
+  suite.test("too many required", (): void => { expectSlice<int>([1, 2]).toContainAll([1, 2, 1]); });
+  suite.test("missing element", (): void => { expectSlice<int>([1, 2, 3]).toContainAll([4]); });
+  suite.test("negated nil inclusion", (): void => {
+    const missing: int[] = nil;
+    expectSlice<int>(missing).not.toContainAll(missing);
+  });
+  suite.test("negated empty inclusion", (): void => {
+    const actual: int[] = [42];
+    const empty: int[] = [];
+    new SliceExpectation<int>(actual).not.toContainAll(empty);
+  });
+  suite.test("nested order remains significant", (): void => {
+    const actual: int[][] = [[1, 2]];
+    const expected: int[][] = [[2, 1]];
+    expectSlice<int[]>(actual).toContainAll(expected);
+  });
+  suite.test("NaN element", (): void => {
+    const values: float64[] = [math.NaN()];
+    expectSlice<float64>(values).toContainAll(values);
+  });
+  suite.test("explicit failure location", (): void => {
+    withTestLocation("domain-check.km", 42, (): void => { expectSlice<int>([1, 1]).toContainAll([1, 2]); });
+  });
+  suite.test("later case", (): void => { fmt.Println("slice-containment-failing-later"); });
+  suite.runAndExit();
+}

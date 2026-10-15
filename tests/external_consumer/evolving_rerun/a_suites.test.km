@@ -1,0 +1,43 @@
+import { Suite, FixtureSuite, TestContext, expect, withTestLocation } from "vasest";
+import go fmt from "fmt";
+import go os from "os";
+
+function main(): void {
+  const name = "金木犀 <&> evolving suite";
+  const changed = os.Getenv("VASEST_EVOLVING_CHANGED") == "1";
+  let caseName = "original failure";
+  let passingName = "passing fixture";
+  if (changed) {
+    caseName = "renamed failure";
+    passingName = name;
+  }
+  const original = new Suite(name);
+  original.beforeAll((): void => { fmt.Println("evolving-original-setup"); });
+  original.afterEach((): void => { fmt.Println("evolving-original-cleanup"); });
+  original.test(caseName, (): void => {
+    fmt.Println("evolving-original-body", caseName);
+    if (os.Getenv("VASEST_EVOLVING_FIXED") != "1") {
+      withTestLocation("evolving-check.km", 42, (): void => { expect<int>(1).toEqual(2); });
+    }
+  });
+  const passing = new FixtureSuite<int>(passingName, (context: TestContext): int => {
+    fmt.Println("evolving-passing-setup");
+    context.cleanup((): void => { fmt.Println("evolving-passing-cleanup"); });
+    return 42;
+  });
+  passing.test("original failure", (value: int, context: TestContext): void => {
+    expect<int>(value).toEqual(42);
+    fmt.Println("evolving-passing-body");
+  });
+  if (os.Getenv("VASEST_EVOLVING_REVERSED") == "1") {
+    passing.run();
+    original.run();
+  } else {
+    original.run();
+    passing.run();
+  }
+  const unrelated = new Suite("unrelated suite");
+  unrelated.beforeAll((): void => { fmt.Println("evolving-unrelated-setup"); });
+  unrelated.test("unrelated case", (): void => { fmt.Println("evolving-unrelated-body"); });
+  unrelated.runAndExit();
+}

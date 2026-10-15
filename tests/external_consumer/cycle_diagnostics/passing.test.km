@@ -1,0 +1,58 @@
+import { Suite, expect, expectFunction, expectSlice } from "vasest";
+import go fmt from "fmt";
+import go debug from "runtime/debug";
+
+class Loop {
+  public label: int;
+  public children: Map<string, Loop>;
+  constructor(label: int, children: Map<string, Loop>) { this.label = label; this.children = children; }
+}
+
+class PrintedLoop implements fmt.GoStringer {
+  public child: PrintedLoop;
+  public reads: int;
+  constructor() { this.child = nil; this.reads = 0; }
+  public function GoString(): string { this.reads++; return "domain-cycle"; }
+}
+
+class Node {
+  public next: Node;
+  constructor(next: Node) { this.next = next; }
+}
+
+function main(): void {
+  debug.SetMaxStack(1048576);
+  const suite = new Suite("cycle diagnostic compatibility");
+  suite.test("native values keep their ordinary messages", (): void => {
+    expectFunction((): void => { expect<int64>(int64(42)).toEqual(int64(43)); }).toThrowMessage("expected 43, got 42");
+    expectFunction((): void => { expect<string>("a\nb").toEqual("a\nc"); }).toThrowMessage("line 2: expected");
+  });
+  suite.test("cycles compare normally and format only on failure", (): void => {
+    const children: Map<string, Loop> = makeMap[string, Loop]();
+    const value = new Loop(42, children);
+    children["self"] = value;
+    expect<Loop>(value).toEqual(value);
+    const caught = expectFunction((): void => { expect<Loop>(value).not.toEqual(value); }).toThrow();
+    expect<string>(caught.Error()).toSatisfy((text: string): boolean => { return len(text) < 300; });
+    expectFunction((): void => { expect<Loop>(value).not.toEqual(value); }).toThrowMessage("<cyclic value>");
+    expect(children["self"].label).toEqual(42);
+  });
+  suite.test("explicit GoString retains its native invocation", (): void => {
+    const value = new PrintedLoop();
+    value.child = value;
+    expect<PrintedLoop>(value).toEqual(value);
+    expect(value.reads).toEqual(0);
+    expectFunction((): void => { expect<PrintedLoop>(value).not.toEqual(value); }).toThrowMessage("domain-cycle");
+    expect(value.reads).toEqual(1);
+  });
+  suite.test("deep and wide graphs have bounded traversal", (): void => {
+    let node: Node = nil;
+    for (let index = 0; index < 100; index++) { node = new Node(node); }
+    expectFunction((): void => { expect<Node>(node).not.toEqual(node); }).toThrowMessage("<diagnostic traversal limit>");
+    let values: int[] = [];
+    for (let index = 0; index < 5000; index++) { values = append(values, index); }
+    expectFunction((): void => { expectSlice<int>(values).not.toContain(int(0)); }).toThrowMessage("<diagnostic traversal limit>");
+  });
+  suite.test("later case", (): void => { fmt.Println("cycle-diagnostic-passing-later"); });
+  suite.runAndExit();
+}

@@ -1,0 +1,41 @@
+import { Suite, TestContext, MockFn, MockReturnSource, expectMockReturn, expectFunction } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+
+function main(): void {
+  const suite = new Suite("mock return failures");
+  const empty = new MockFn<int, int>((value: int): int => { return value; });
+  const mock = new MockFn<int, int>((value: int): int => { return value; });
+  mock.invoke(42);
+  const throwing = new MockFn<int, int>((value: int): int => { throw errors.New("thrown return fixture"); });
+  expectFunction((): void => { throwing.invoke(42); }).toThrow();
+  suite.afterEach((): void => { fmt.Println("mock-return-afterEach"); });
+  suite.testWithContext("returned", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("mock-return-cleanup"); });
+    expectMockReturn<int>(empty).toHaveReturned();
+  });
+  suite.test("count", (): void => { expectMockReturn<int>(mock).toHaveReturnedTimes(2); });
+  suite.test("value", (): void => { expectMockReturn<int>(mock).toHaveReturnedWith(43); });
+  suite.test("nth value", (): void => { expectMockReturn<int>(mock).toHaveNthReturnedWith(1, 43); });
+  suite.test("last value", (): void => { expectMockReturn<int>(mock).toHaveLastReturnedWith(43); });
+  suite.test("negated returned", (): void => { expectMockReturn<int>(mock).not.toHaveReturned(); });
+  suite.test("negated count", (): void => { expectMockReturn<int>(mock).not.toHaveReturnedTimes(1); });
+  suite.test("negated value", (): void => { expectMockReturn<int>(mock).not.toHaveReturnedWith(42); });
+  suite.test("negated nth value", (): void => { expectMockReturn<int>(mock).not.toHaveNthReturnedWith(1, 42); });
+  suite.test("negated last value", (): void => { expectMockReturn<int>(mock).not.toHaveLastReturnedWith(42); });
+  suite.test("invalid count", (): void => { expectMockReturn<int>(mock).toHaveReturnedTimes(-1); });
+  suite.test("negated invalid count", (): void => { expectMockReturn<int>(mock).not.toHaveReturnedTimes(-1); });
+  suite.test("invalid index", (): void => { expectMockReturn<int>(mock).toHaveNthReturnedWith(0, 42); });
+  suite.test("negated invalid index", (): void => { expectMockReturn<int>(mock).not.toHaveNthReturnedWith(0, 42); });
+  suite.test("nil source", (): void => {
+    const source: MockReturnSource<int> = nil;
+    expectMockReturn<int>(source).toHaveReturned();
+  });
+  suite.test("typed nil source", (): void => {
+    const source: MockFn<int, int> = nil;
+    expectMockReturn<int>(source).not.toHaveReturned();
+  });
+  suite.test("last invocation threw", (): void => { expectMockReturn<int>(throwing).toHaveLastReturnedWith(0); });
+  suite.test("later case", (): void => { fmt.Println("mock-return-later"); });
+  suite.runAndExit();
+}

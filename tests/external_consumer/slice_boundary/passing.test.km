@@ -1,0 +1,97 @@
+import { Suite, SliceExpectation, NegatedSliceExpectation, expectSlice, expect } from "vasest";
+import go fmt from "fmt";
+import go math from "math";
+
+type UserID = distinct uint64;
+
+class Node {
+  public value: int;
+  public next: Node;
+  constructor(value: int) { this.value = value; this.next = nil; }
+}
+
+function main(): void {
+  const suite = new Suite("typed slice boundaries");
+  suite.test("native types constructors and method bindings", (): void => {
+    const large = UserID(18446744073709551615);
+    const values: UserID[] = [large, UserID(42), large];
+    const matcher: SliceExpectation<UserID> = expectSlice<UserID>(values);
+    const prefix: (expected: UserID[]) => void = matcher.toStartWith;
+    const suffix: (expected: UserID[]) => void = matcher.toEndWith;
+    const notPrefix: (expected: UserID[]) => void = matcher.not.toStartWith;
+    const notSuffix: (expected: UserID[]) => void = matcher.not.toEndWith;
+    prefix([large, UserID(42)]);
+    suffix([UserID(42), large]);
+    notPrefix([UserID(42)]);
+    notSuffix([UserID(42)]);
+    new SliceExpectation<UserID>(values).toStartWith([large]);
+    new NegatedSliceExpectation<UserID>(values).toEndWith([UserID(42)]);
+    expectSlice(values).toEndWith([large]);
+    expectSlice(values).not.toStartWith([UserID(42)]);
+    expect<UserID>(values[0]).toEqual(large);
+  });
+  suite.test("empty fragments and positional duplicates", (): void => {
+    const missing: int[] = nil;
+    const empty: int[] = [];
+    expectSlice<int>(missing).toStartWith(empty);
+    expectSlice<int>(empty).toEndWith(missing);
+    expectSlice<int>([1, 1, 2, 1]).toStartWith([1, 1]);
+    expectSlice<int>([1, 1, 2, 1]).toEndWith([2, 1]);
+    expectSlice<int>([1, 1, 2, 1]).not.toStartWith([1, 2]);
+    expectSlice<int>([1, 1, 2, 1]).not.toEndWith([1, 1]);
+    expectSlice<int>([1]).not.toStartWith([1, 1]);
+    expectSlice<int>([1]).not.toEndWith([1, 1]);
+  });
+  suite.test("nested native values", (): void => {
+    const missing: int[] = nil;
+    const empty: int[] = [];
+    const values: int[][] = [missing, empty, [1, 2]];
+    expectSlice<int[]>(values).toStartWith([missing, empty]);
+    expectSlice<int[]>(values).toEndWith([[1, 2]]);
+    expectSlice<int[]>(values).not.toStartWith([empty, missing]);
+    expectSlice<int[]>(values).not.toEndWith([[2, 1]]);
+    const first: Map<string, int> = makeMap[string, int]();
+    const second: Map<string, int> = makeMap[string, int]();
+    first["value"] = 42;
+    second["value"] = 42;
+    expectSlice<Map<string, int>>([first, first]).toStartWith([second]);
+    expectSlice<Map<string, int>>([first, first]).toEndWith([second]);
+  });
+  suite.test("cycles and native floating point equality", (): void => {
+    const first = new Node(42);
+    const second = new Node(42);
+    first.next = first;
+    second.next = second;
+    const fromStart: Node[] = [first, nil];
+    const fromEnd: Node[] = [nil, first];
+    expectSlice<Node>(fromStart).toStartWith([second]);
+    expectSlice<Node>(fromEnd).toEndWith([second]);
+    second.value = 43;
+    expectSlice<Node>([first]).not.toStartWith([second]);
+    expectSlice<Node>([first]).not.toEndWith([second]);
+    expect<Node>(first.next).toBe(first);
+    const nans: float64[] = [math.NaN()];
+    expectSlice<float64>(nans).not.toStartWith(nans);
+    expectSlice<float64>(nans).not.toEndWith(nans);
+    expectSlice<float64[]>([nans]).toStartWith([nans]);
+    expectSlice<float64>([math.Copysign(0, -1), math.Inf(1)]).toStartWith([float64(0)]);
+    expectSlice<float64>([math.Inf(1), math.Inf(-1)]).toEndWith([math.Inf(-1)]);
+  });
+  suite.test("saved matchers observe backing elements", (): void => {
+    let values: int[] = [1, 2];
+    const matcher = expectSlice<int>(values);
+    matcher.toStartWith([1]);
+    matcher.toEndWith([2]);
+    values[0] = 3;
+    values[1] = 4;
+    matcher.toStartWith([3]);
+    matcher.toEndWith([4]);
+    matcher.not.toStartWith([1]);
+    matcher.not.toEndWith([2]);
+    values = [9];
+    matcher.toStartWith([3]);
+    matcher.toEndWith([4]);
+  });
+  suite.test("later case", (): void => { fmt.Println("slice-boundary-passing-later"); });
+  suite.runAndExit();
+}

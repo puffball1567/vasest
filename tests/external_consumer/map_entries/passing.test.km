@@ -1,0 +1,96 @@
+import { Suite, MapExpectation, expectMap, expect, expectFunction } from "vasest";
+import go fmt from "fmt";
+import go math from "math";
+
+type UserID = distinct uint64;
+type Score = distinct int64;
+
+class Node {
+  public value: int;
+  public next: Node;
+  constructor(value: int) { this.value = value; this.next = nil; }
+}
+
+function main(): void {
+  const suite = new Suite("typed map entry subsets");
+  suite.test("native types explicit construction and binding", (): void => {
+    const large = UserID(18446744073709551615);
+    const actual: Map<UserID, Score> = makeMap[UserID, Score]();
+    const required: Map<UserID, Score> = makeMap[UserID, Score]();
+    actual[large] = Score(1152921504606846977);
+    actual[UserID(42)] = Score(0);
+    required[large] = Score(1152921504606846977);
+    const matcher: MapExpectation<UserID, Score> = expectMap<UserID, Score>(actual);
+    matcher.toHaveEntries(required);
+    expectMap(actual).toHaveEntries(required);
+    new MapExpectation<UserID, Score>(actual).toHaveEntries(required);
+    const check: (expected: Map<UserID, Score>) => void = matcher.toHaveEntries;
+    check(required);
+    required[large] = Score(1152921504606846978);
+    matcher.not.toHaveEntries(required);
+    expect(actual[large]).toEqual(Score(1152921504606846977));
+  });
+  suite.test("empty requirements and missing zero values", (): void => {
+    const missing: Map<string, int> = nil;
+    const empty: Map<string, int> = makeMap[string, int]();
+    const actual: Map<string, int> = makeMap[string, int]();
+    const required: Map<string, int> = makeMap[string, int]();
+    actual["zero"] = 0;
+    required["zero"] = 0;
+    expectMap<string, int>(missing).toHaveEntries(empty);
+    expectMap<string, int>(empty).toHaveEntries(missing);
+    expectMap(actual).toHaveEntries(missing);
+    expectMap(actual).toHaveEntries(required);
+    expectMap(missing).not.toHaveEntries(required);
+    expectMap(empty).not.toHaveEntries(required);
+  });
+  suite.test("native key identity deep values and cycles", (): void => {
+    const first = new Node(42);
+    const second = new Node(42);
+    first.next = first;
+    second.next = second;
+    const actual: Map<Node, Node> = makeMap[Node, Node]();
+    const required: Map<Node, Node> = makeMap[Node, Node]();
+    actual[first] = first;
+    required[first] = second;
+    expectMap<Node, Node>(actual).toHaveEntries(required);
+    expectFunction((): void => { expectMap(actual).not.toHaveEntries(required); }).toThrowMessage("<cyclic value>");
+    const differentKey: Map<Node, Node> = makeMap[Node, Node]();
+    differentKey[second] = second;
+    expectMap(actual).not.toHaveEntries(differentKey);
+    expect(first.next).toBe(first);
+  });
+  suite.test("native NaN keys and values do not shortcut aliases", (): void => {
+    const keys: Map<float64, int> = makeMap[float64, int]();
+    keys[math.NaN()] = 42;
+    expectMap<float64, int>(keys).not.toHaveEntries(keys);
+    const values: Map<string, float64> = makeMap[string, float64]();
+    values["nan"] = math.NaN();
+    expectMap<string, float64>(values).not.toHaveEntries(values);
+    const actual: Map<float64, float64> = makeMap[float64, float64]();
+    const required: Map<float64, float64> = makeMap[float64, float64]();
+    actual[float64(0)] = math.Inf(1);
+    required[math.Copysign(0, -1)] = math.Inf(1);
+    expectMap(actual).toHaveEntries(required);
+  });
+  suite.test("saved checks observe native nested map changes", (): void => {
+    const actual: Map<string, int[]> = makeMap[string, int[]]();
+    const required: Map<string, int[]> = makeMap[string, int[]]();
+    const row: int[] = [42, 43];
+    actual["row"] = row;
+    required["row"] = [42, 43];
+    const matcher = expectMap<string, int[]>(actual);
+    matcher.toHaveEntries(required);
+    row[0] = 44;
+    matcher.not.toHaveEntries(required);
+    required["row"] = [44, 43];
+    matcher.toHaveEntries(required);
+    const nilRow: int[] = nil;
+    const emptyRow: int[] = [];
+    actual["nil"] = nilRow;
+    required["nil"] = emptyRow;
+    matcher.not.toHaveEntries(required);
+  });
+  suite.test("later case", (): void => { fmt.Println("map-entries-passing-later"); });
+  suite.runAndExit();
+}

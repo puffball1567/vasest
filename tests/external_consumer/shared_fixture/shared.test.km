@@ -1,0 +1,95 @@
+import { FixtureSuite, TestContext, expectEqual, expectNoError, expectTrue, fail } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+import go os from "os";
+
+struct Resource {
+  path: string;
+}
+
+function main(): void {
+  const [original, existed] = os.LookupEnv("VASEST_SHARED_RESOURCE");
+  let setups = 0;
+  let cleaned = 0;
+  let sharedPath = "";
+  let casePaths: string[] = [];
+  const suite = new FixtureSuite<Resource>("shared values", (context: TestContext): Resource => {
+    setups++;
+    sharedPath = context.tempDir();
+    context.setEnv("VASEST_SHARED_RESOURCE", sharedPath);
+    context.cleanup((): void => {
+      cleaned++;
+      const [info, statError] = os.Stat(sharedPath);
+      expectNoError(statError);
+      expectTrue(info.IsDir());
+    });
+    return Resource { path: sharedPath };
+  });
+  suite.beforeAll((resource: Resource): void => {
+    expectEqual(resource.path, sharedPath);
+  });
+  suite.beforeEach((resource: Resource): void => {
+    expectEqual(setups, 1);
+    expectEqual(os.Getenv("VASEST_SHARED_RESOURCE"), resource.path);
+    for (const path of casePaths) {
+      const [info, statError] = os.Stat(path);
+      expectTrue(os.IsNotExist(statError));
+    }
+  });
+  suite.afterEach((resource: Resource): void => {
+    const [info, statError] = os.Stat(resource.path);
+    expectNoError(statError);
+    expectEqual(os.Getenv("VASEST_SHARED_RESOURCE"), "case");
+  });
+  suite.afterAll((resource: Resource): void => {
+    expectEqual(cleaned, 0);
+    expectEqual(os.Getenv("VASEST_SHARED_RESOURCE"), resource.path);
+  });
+  const body = (resource: Resource, context: TestContext): void => {
+    expectEqual(resource.path, sharedPath);
+    casePaths = append(casePaths, context.tempDir());
+    context.setEnv("VASEST_SHARED_RESOURCE", "case");
+  };
+  suite.test("success: single", body);
+  suite.testEach([1, 2], (row: int): string => {
+    return fmt.Sprintf("success: row %d", row);
+  }, (row: int, resource: Resource, context: TestContext): void => {
+    body(resource, context);
+    expectTrue(row > 0);
+  });
+  suite.skip("success: disabled", (resource: Resource, context: TestContext): void => { fail("disabled case ran"); });
+  suite.todo("success: planned");
+  const passed = suite.run();
+  expectTrue(passed.success());
+  if (setups > 0) {
+    expectEqual(setups, 1);
+    expectEqual(cleaned, 1);
+    const [info, statError] = os.Stat(sharedPath);
+    expectTrue(os.IsNotExist(statError));
+    const [restored, set] = os.LookupEnv("VASEST_SHARED_RESOURCE");
+    expectEqual(restored, original);
+    expectEqual(set, existed);
+  }
+
+  let partialPath = "";
+  const setupFailure = new FixtureSuite<int>("shared setup failure", (context: TestContext): int => {
+    partialPath = context.tempDir();
+    throw errors.New("");
+  });
+  setupFailure.afterAll((value: int): void => { fail("typed hook ran without a prepared value"); });
+  setupFailure.test("blocked", (value: int, context: TestContext): void => { fail("body ran after setup failure"); });
+  setupFailure.run();
+  if (partialPath != "") {
+    const [info, statError] = os.Stat(partialPath);
+    expectTrue(os.IsNotExist(statError));
+  }
+
+  const cleanupFailure = new FixtureSuite<int>("shared cleanup failure", (context: TestContext): int => {
+    context.cleanup((): void => { fail("first shared cleanup"); });
+    context.cleanup((): void => { throw errors.New(""); });
+    return 42;
+  });
+  cleanupFailure.afterAll((value: int): void => { fail("shared hook <&> failed"); });
+  cleanupFailure.test("body passes", (value: int, context: TestContext): void => { expectEqual(value, 42); });
+  cleanupFailure.run();
+}

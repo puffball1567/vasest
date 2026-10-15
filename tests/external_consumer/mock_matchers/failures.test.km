@@ -1,0 +1,37 @@
+import { Suite, TestContext, MockFn, MockAction, MockCallSource, expectMock } from "vasest";
+import go fmt from "fmt";
+
+function main(): void {
+  const suite = new Suite("mock matcher failures");
+  const empty = new MockAction<int>((value: int): void => {});
+  const mock = new MockFn<int, int>((value: int): int => { return value; });
+  mock.invoke(42);
+  suite.afterEach((): void => { fmt.Println("mock-matcher-afterEach"); });
+  suite.testWithContext("called", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("mock-matcher-cleanup"); });
+    expectMock<int>(empty).toHaveBeenCalled();
+  });
+  suite.test("count", (): void => { expectMock<int>(mock).toHaveBeenCalledTimes(2); });
+  suite.test("argument", (): void => { expectMock<int>(mock).toHaveBeenCalledWith(43); });
+  suite.test("nth argument", (): void => { expectMock<int>(mock).toHaveBeenNthCalledWith(1, 43); });
+  suite.test("last argument", (): void => { expectMock<int>(mock).toHaveBeenLastCalledWith(43); });
+  suite.test("negated called", (): void => { expectMock<int>(mock).not.toHaveBeenCalled(); });
+  suite.test("negated count", (): void => { expectMock<int>(mock).not.toHaveBeenCalledTimes(1); });
+  suite.test("negated argument", (): void => { expectMock<int>(mock).not.toHaveBeenCalledWith(42); });
+  suite.test("negated nth argument", (): void => { expectMock<int>(mock).not.toHaveBeenNthCalledWith(1, 42); });
+  suite.test("negated last argument", (): void => { expectMock<int>(mock).not.toHaveBeenLastCalledWith(42); });
+  suite.test("invalid count", (): void => { expectMock<int>(mock).toHaveBeenCalledTimes(-1); });
+  suite.test("negated invalid count", (): void => { expectMock<int>(mock).not.toHaveBeenCalledTimes(-1); });
+  suite.test("invalid index", (): void => { expectMock<int>(mock).toHaveBeenNthCalledWith(0, 42); });
+  suite.test("negated invalid index", (): void => { expectMock<int>(mock).not.toHaveBeenNthCalledWith(0, 42); });
+  suite.test("nil source", (): void => {
+    const source: MockCallSource<int> = nil;
+    expectMock<int>(source).toHaveBeenCalled();
+  });
+  suite.test("typed nil source", (): void => {
+    const source: MockFn<int, int> = nil;
+    expectMock<int>(source).not.toHaveBeenCalled();
+  });
+  suite.test("later case", (): void => { fmt.Println("mock-matcher-later"); });
+  suite.runAndExit();
+}

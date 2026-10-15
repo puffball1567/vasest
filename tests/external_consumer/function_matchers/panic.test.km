@@ -1,0 +1,15 @@
+import { Suite, TestContext, expectFunction } from "vasest";
+import go fmt from "fmt";
+import go reflect from "reflect";
+
+function main(): void {
+  const suite = new Suite("native function panic");
+  suite.afterEach((): void => { fmt.Println("function-panic-afterEach"); });
+  suite.afterAll((): void => { fmt.Println("function-panic-afterAll"); });
+  suite.testWithContext("native panic escapes", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("function-panic-cleanup"); });
+    expectFunction((): void => { reflect.ValueOf(1).Index(0); }).not.toThrow();
+  });
+  suite.test("later case", (): void => { fmt.Println("unreachable-function-panic-later"); });
+  suite.runAndExit();
+}

@@ -1,0 +1,108 @@
+import { Suite, MockFn, MockAction, MockOutcomeResult, MockOutcomeSource, MockOutcomeExpectation, expectMockOutcome, expectFunction, expect } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+import go os from "os";
+
+class CodedError implements error {
+  public code: int;
+  constructor(code: int) { this.code = code; }
+  public function Error(): string { return fmt.Sprintf("code %d", this.code); }
+  public function String(): string { return this.Error(); }
+}
+
+class Spy implements MockOutcomeSource {
+  public reads: int;
+  public exception: error;
+  constructor(exception: error) { this.reads = 0; this.exception = exception; }
+  public function outcomes(): MockOutcomeResult[] {
+    this.reads++;
+    return [MockOutcomeResult { status: "throw", exception: this.exception }];
+  }
+}
+
+function main(): void {
+  const suite = new Suite("mock error chain matchers");
+  suite.test("action causes retain identity through wrappers and joins", (): void => {
+    const cause = errors.New("same message");
+    const wrapped = errors.Join(errors.New("other"), fmt.Errorf("load: %w", cause));
+    let invoked = 0;
+    const action = new MockAction<int>((value: int): void => { invoked++; });
+    action.implementOnce((value: int): void => { throw wrapped; });
+    const matcher: MockOutcomeExpectation = expectMockOutcome(action);
+    matcher.not.toHaveNthThrownCause(1, cause);
+    matcher.not.toHaveLastThrownType<error>();
+    expect(invoked).toEqual(0);
+    expectFunction((): void => { action.invoke(1); }).toThrow();
+    matcher.toHaveNthThrownCause(1, cause);
+    matcher.toHaveLastThrownCause(cause);
+    matcher.not.toHaveNthThrownCause(1, errors.New("same message"));
+    matcher.not.toHaveLastThrownCause(nil);
+    let found: error = nil;
+    matcher.toHaveNthThrownType<error>(1, &found);
+    expect(found).toBe(wrapped);
+    matcher.not.toHaveNthThrownType<*os.PathError>(1);
+    action.invoke(2);
+    matcher.not.toHaveLastThrownCause(cause);
+    matcher.not.toHaveLastThrownType<error>();
+    matcher.toHaveNthThrownCause(1, cause);
+    expect(invoked).toEqual(1);
+    action.clearCalls();
+    matcher.not.toHaveLastThrownCause(cause);
+    matcher.not.toHaveNthThrownType<error>(1);
+  });
+  suite.test("native pointer extraction with explicit type arguments", (): void => {
+    const original = os.PathError { Op: "open", Path: "金木犀", Err: os.ErrNotExist };
+    const mock = new MockFn<int, error>((value: int): error => { return &original; });
+    mock.invoke(1);
+    expectMockOutcome(mock).not.toHaveLastThrownCause(os.ErrNotExist);
+    mock.implementOnce((value: int): error => { throw fmt.Errorf("load: %w", &original); });
+    expectFunction((): void => { mock.invoke(2); }).toThrow();
+    let found: *os.PathError = nil;
+    new MockOutcomeExpectation(mock).toHaveLastThrownType<*os.PathError>(&found);
+    expect(found.Path).toEqual("金木犀");
+    expectMockOutcome(mock).toHaveNthThrownCause(2, os.ErrNotExist);
+    expectMockOutcome(mock).not.toHaveNthThrownType<*os.PathError>(1);
+  });
+  suite.test("application error extraction also supports inference and interfaces", (): void => {
+    const original = new CodedError(42);
+    const action = new MockAction<int>((value: int): void => { throw fmt.Errorf("load: %w", original); });
+    expectFunction((): void => { action.invoke(1); }).toThrow();
+    let found: CodedError = nil;
+    expectMockOutcome(action).toHaveNthThrownType(1, &found);
+    expect(found).toBe(original);
+    expectMockOutcome(action).toHaveLastThrownType<CodedError>(&found);
+    let text: fmt.Stringer = nil;
+    expectMockOutcome(action).toHaveLastThrownType<fmt.Stringer>(&text);
+    expect(text.String()).toEqual("code 42");
+    expectMockOutcome(action).not.toHaveLastThrownType<*os.PathError>();
+  });
+  suite.test("nil throw payload still counts as a throw", (): void => {
+    const action = new MockAction<int>((value: int): void => { const missing: error = nil; throw missing; });
+    expectFunction((): void => { action.invoke(1); }).toThrow();
+    expectMockOutcome(action).toHaveNthThrownCause(1, nil);
+    expectMockOutcome(action).toHaveLastThrownCause(nil);
+    expectMockOutcome(action).not.toHaveLastThrownType<error>();
+    expectMockOutcome(action).not.toHaveNthThrownCause(2, nil);
+  });
+  suite.test("typed nil exceptions retain their concrete type", (): void => {
+    const action = new MockAction<int>((value: int): void => { const missing: *os.PathError = nil; throw missing; });
+    expectFunction((): void => { action.invoke(1); }).toThrow();
+    let found: *os.PathError = nil;
+    expectMockOutcome(action).toHaveLastThrownType<*os.PathError>(&found);
+    expect(found).toBeNil();
+    expectMockOutcome(action).not.toHaveLastThrownCause(nil);
+  });
+  suite.test("custom sources are read once for every check", (): void => {
+    const cause = errors.New("cause");
+    const spy = new Spy(fmt.Errorf("wrapped: %w", cause));
+    const source: MockOutcomeSource = spy;
+    expectMockOutcome(source).toHaveLastThrownCause(cause);
+    expect(spy.reads).toEqual(1);
+    let found: error = nil;
+    new MockOutcomeExpectation(source).toHaveLastThrownType<error>(&found);
+    expect(spy.reads).toEqual(2);
+    expectMockOutcome(source).not.toHaveNthThrownType<error>(2);
+    expect(spy.reads).toEqual(3);
+  });
+  suite.runAndExit();
+}

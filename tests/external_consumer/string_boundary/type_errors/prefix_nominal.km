@@ -1,0 +1,5 @@
+import { expectString } from "vasest";
+type Fragment = distinct string;
+function main(): void {
+  expectString("value").toStartWith(Fragment("value"));
+}

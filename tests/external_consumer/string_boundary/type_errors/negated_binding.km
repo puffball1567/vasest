@@ -1,0 +1,5 @@
+import { StringExpectation, NegatedStringExpectation, expectString } from "vasest";
+function main(): void {
+  const check: (text: int) => void = expectString("value").not.toEndWith;
+  check(42);
+}

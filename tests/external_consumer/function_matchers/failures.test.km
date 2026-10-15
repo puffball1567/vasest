@@ -1,0 +1,51 @@
+import { Suite, TestContext, expectFunction } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+import go os from "os";
+
+function forbidden(): void { fmt.Println("unreachable-function-body"); }
+
+function main(): void {
+  const suite = new Suite("function matcher failures");
+  suite.afterEach((): void => { fmt.Println("function-matcher-afterEach"); });
+  suite.testWithContext("missing throw", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("function-matcher-cleanup"); });
+    expectFunction((): void => {}).toThrow();
+  });
+  suite.test("unexpected throw", (): void => {
+    expectFunction((): void => { throw errors.New("actual"); }).not.toThrow();
+  });
+  suite.test("wrong message", (): void => {
+    expectFunction((): void => { throw errors.New("actual"); }).toThrowMessage("missing");
+  });
+  suite.test("negated message", (): void => {
+    expectFunction((): void => { throw errors.New("actual"); }).not.toThrowMessage("actual");
+  });
+  suite.test("wrong cause", (): void => {
+    expectFunction((): void => { throw errors.New("actual"); }).toThrowCause(os.ErrNotExist);
+  });
+  suite.test("negated cause", (): void => {
+    expectFunction((): void => { throw os.ErrNotExist; }).not.toThrowCause(os.ErrNotExist);
+  });
+  suite.test("wrong type", (): void => {
+    let found: *os.PathError = nil;
+    expectFunction((): void => { throw errors.New("actual"); }).toThrowType<*os.PathError>(&found);
+  });
+  suite.test("negated type", (): void => {
+    expectFunction((): void => { throw errors.New("actual"); }).not.toThrowType<error>();
+  });
+  suite.test("invalid target", (): void => {
+    let wrong = 0;
+    expectFunction(forbidden).toThrowType<int>(&wrong);
+  });
+  suite.test("nil target", (): void => {
+    let missing: *error = nil;
+    expectFunction(forbidden).toThrowType<error>(missing);
+  });
+  suite.test("invalid negated type", (): void => { expectFunction(forbidden).not.toThrowType<int>(); });
+  suite.test("invalid message", (): void => { expectFunction(forbidden).toThrowMessage(""); });
+  suite.test("invalid negated message", (): void => { expectFunction(forbidden).not.toThrowMessage(""); });
+  suite.test("nil callback", (): void => { expectFunction(nil).not.toThrow(); });
+  suite.test("later case", (): void => { fmt.Println("function-matcher-later-case"); });
+  suite.runAndExit();
+}

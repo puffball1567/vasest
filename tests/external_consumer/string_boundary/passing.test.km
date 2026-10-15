@@ -1,0 +1,55 @@
+import { Suite, StringExpectation, NegatedStringExpectation, expectString, expectFunction, expect } from "vasest";
+import go fmt from "fmt";
+
+function main(): void {
+  const suite = new Suite("native string boundaries");
+  suite.test("constructors and bound methods preserve captured strings", (): void => {
+    let actual = "service/result.json";
+    const matcher: StringExpectation = expectString(actual);
+    const prefix: (text: string) => void = matcher.toStartWith;
+    const suffix: (text: string) => void = matcher.not.toEndWith;
+    actual = "replacement.txt";
+    prefix("service/");
+    suffix(".txt");
+    matcher.toEndWith(".json");
+    new StringExpectation("service/result.json").toStartWith("service/");
+    new NegatedStringExpectation("service/result.json").toEndWith(".txt");
+    expect(actual).toEqual("replacement.txt");
+  });
+  suite.test("literal boundaries require no regex escaping", (): void => {
+    expectString("application/json; charset=utf-8").toStartWith("application/json");
+    expectString("application/json; charset=utf-8").toEndWith("utf-8");
+    expectString("[user]+.json").toStartWith("[user]+");
+    expectString("[user]+.json").toEndWith(".json");
+    expectString("application/json").not.toStartWith("APPLICATION");
+    expectString("application/json").not.toEndWith(".json");
+  });
+  suite.test("empty fragments match every string", (): void => {
+    expectString("value").toStartWith("");
+    expectString("value").toEndWith("");
+    expectString("").toStartWith("");
+    expectString("").toEndWith("");
+    expectString("").not.toStartWith("value");
+    expectString("").not.toEndWith("value");
+    expectFunction((): void => { expectString("value").not.toStartWith(""); }).toThrowMessage("not to start with");
+    expectFunction((): void => { expectString("").not.toEndWith(""); }).toThrowMessage("not to end with");
+  });
+  suite.test("Unicode text retains native bytes without normalization", (): void => {
+    expectString("金木犀🌼").toStartWith("金木");
+    expectString("金木犀🌼").toEndWith("🌼");
+    expectString("é").not.toStartWith("é");
+    expectString("é").not.toEndWith("é");
+  });
+  suite.test("native byte strings retain NUL and invalid UTF-8", (): void => {
+    const values: uint8[] = [uint8(255), uint8(0), uint8(254)];
+    const first: uint8[] = [uint8(255)];
+    const last: uint8[] = [uint8(254)];
+    const actual = string(values);
+    expectString(actual).toStartWith(string(first));
+    expectString(actual).toEndWith(string(last));
+    expectString(actual).not.toStartWith("text");
+    expectString(actual).toHaveLength(3);
+  });
+  suite.test("later case", (): void => { fmt.Println("string-boundary-passing-later"); });
+  suite.runAndExit();
+}

@@ -1,0 +1,4 @@
+import { expect } from "vasest";
+type UserID = distinct int;
+type OrderID = distinct int;
+function main(): void { expect<UserID>(UserID(42)).not.toSatisfy((value: OrderID): boolean => { return true; }); }

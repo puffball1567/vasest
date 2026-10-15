@@ -1,0 +1,52 @@
+import { Suite, TestContext, MockFn, MockOutcomeSource, expectMockOutcome, expectFunction, withTestLocation } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+
+function main(): void {
+  const suite = new Suite("mock thrown predicate failures");
+  const action = new MockFn<int, int>((value: int): int => { return value; });
+  action.implementOnce((value: int): int => { throw errors.New("original"); });
+  expectFunction((): void => { action.invoke(42); }).toThrow();
+  const empty = new MockFn<int, int>((value: int): int => { return value; });
+  suite.afterEach((): void => { fmt.Println("throw-predicate-afterEach"); });
+  suite.testWithContext("any mismatch", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("throw-predicate-cleanup"); });
+    expectMockOutcome(action).toHaveThrownSatisfying((value: error): boolean => { return false; });
+  });
+  suite.test("nth mismatch", (): void => { expectMockOutcome(action).toHaveNthThrownSatisfying(1, (value: error): boolean => { return false; }); });
+  suite.test("last mismatch", (): void => { expectMockOutcome(action).toHaveLastThrownSatisfying((value: error): boolean => { return false; }); });
+  suite.test("negated any mismatch", (): void => { expectMockOutcome(action).not.toHaveThrownSatisfying((value: error): boolean => { return true; }); });
+  suite.test("negated nth mismatch", (): void => { expectMockOutcome(action).not.toHaveNthThrownSatisfying(1, (value: error): boolean => { return true; }); });
+  suite.test("negated last mismatch", (): void => { expectMockOutcome(action).not.toHaveLastThrownSatisfying((value: error): boolean => { return true; }); });
+  suite.test("nil any predicate", (): void => { expectMockOutcome(action).toHaveThrownSatisfying(nil); });
+  suite.test("nil nth predicate", (): void => { expectMockOutcome(action).toHaveNthThrownSatisfying(1, nil); });
+  suite.test("nil last predicate", (): void => { expectMockOutcome(action).toHaveLastThrownSatisfying(nil); });
+  suite.test("negated nil any predicate", (): void => { expectMockOutcome(action).not.toHaveThrownSatisfying(nil); });
+  suite.test("negated nil nth predicate", (): void => { expectMockOutcome(action).not.toHaveNthThrownSatisfying(1, nil); });
+  suite.test("negated nil last predicate", (): void => { expectMockOutcome(action).not.toHaveLastThrownSatisfying(nil); });
+  suite.test("invalid index", (): void => { expectMockOutcome(action).toHaveNthThrownSatisfying(0, (value: error): boolean => { return true; }); });
+  suite.test("negated invalid index", (): void => { expectMockOutcome(action).not.toHaveNthThrownSatisfying(-1, (value: error): boolean => { return true; }); });
+  suite.test("missing nth", (): void => { expectMockOutcome(action).toHaveNthThrownSatisfying(2, (value: error): boolean => { return true; }); });
+  suite.test("missing last", (): void => { expectMockOutcome(empty).toHaveLastThrownSatisfying((value: error): boolean => { return true; }); });
+  suite.test("nil source", (): void => { const source: MockOutcomeSource = nil; expectMockOutcome(source).toHaveThrownSatisfying((value: error): boolean => { return true; }); });
+  suite.test("typed nil source", (): void => { const source: MockFn<int, int> = nil; expectMockOutcome(source).not.toHaveLastThrownSatisfying((value: error): boolean => { return false; }); });
+  suite.test("thrown predicate", (): void => { expectMockOutcome(action).not.toHaveThrownSatisfying((value: error): boolean => { throw errors.New("predicate callback failed"); }); });
+  suite.test("explicit callback location", (): void => {
+    expectMockOutcome(action).toHaveNthThrownSatisfying(1, (value: error): boolean => {
+      withTestLocation("domain-check.km", 42, (): void => { throw errors.New("domain predicate failed"); });
+      return true;
+    });
+  });
+  suite.test("returning nth", (): void => {
+    const returned = new MockFn<int, int>((value: int): int => { return value; });
+    returned.invoke(1);
+    expectMockOutcome(returned).toHaveNthThrownSatisfying(1, (value: error): boolean => { throw errors.New("nonthrow was evaluated"); });
+  });
+  suite.test("returning last", (): void => {
+    const returned = new MockFn<int, int>((value: int): int => { return value; });
+    returned.invoke(1);
+    expectMockOutcome(returned).toHaveLastThrownSatisfying((value: error): boolean => { throw errors.New("nonthrow was evaluated"); });
+  });
+  suite.test("later case", (): void => { fmt.Println("throw-predicate-failing-later"); });
+  suite.runAndExit();
+}

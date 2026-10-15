@@ -1,0 +1,69 @@
+import { Suite, TestContext, expectMap, expect, withTestLocation } from "vasest";
+import go fmt from "fmt";
+import go math from "math";
+
+class Node {
+  public next: Node;
+  constructor() { this.next = nil; }
+}
+
+function main(): void {
+  const actual: Map<string, int> = makeMap[string, int]();
+  const required: Map<string, int> = makeMap[string, int]();
+  const wrong: Map<string, int> = makeMap[string, int]();
+  const absent: Map<string, int> = makeMap[string, int]();
+  const empty: Map<string, int> = makeMap[string, int]();
+  const missing: Map<string, int> = nil;
+  actual["value"] = 42;
+  actual["extra"] = 0;
+  required["value"] = 42;
+  wrong["value"] = 43;
+  absent["absent"] = 0;
+  const suite = new Suite("map entry subset failures");
+  suite.afterEach((): void => { fmt.Println("map-entries-afterEach"); });
+  suite.afterAll((): void => { fmt.Println("map-entries-afterAll"); });
+  suite.testWithContext("missing key", (context: TestContext): void => {
+    context.cleanup((): void => { fmt.Println("map-entries-cleanup"); });
+    expectMap<string, int>(actual).toHaveEntries(absent);
+  });
+  suite.test("wrong value", (): void => { expectMap(actual).toHaveEntries(wrong); });
+  suite.test("negated matching subset", (): void => { expectMap(actual).not.toHaveEntries(required); });
+  suite.test("nil actual", (): void => { expectMap(missing).toHaveEntries(required); });
+  suite.test("negated empty requirements", (): void => { expectMap(actual).not.toHaveEntries(empty); });
+  suite.test("negated nil requirements", (): void => { expectMap(missing).not.toHaveEntries(missing); });
+  suite.test("nested nil differs from empty", (): void => {
+    const rows: Map<string, int[]> = makeMap[string, int[]]();
+    const expected: Map<string, int[]> = makeMap[string, int[]]();
+    const nilRow: int[] = nil;
+    const emptyRow: int[] = [];
+    rows["row"] = nilRow;
+    expected["row"] = emptyRow;
+    expectMap<string, int[]>(rows).toHaveEntries(expected);
+  });
+  suite.test("NaN key alias", (): void => {
+    const values: Map<float64, int> = makeMap[float64, int]();
+    values[math.NaN()] = 42;
+    expectMap(values).toHaveEntries(values);
+  });
+  suite.test("NaN value alias", (): void => {
+    const values: Map<string, float64> = makeMap[string, float64]();
+    values["nan"] = math.NaN();
+    expectMap(values).toHaveEntries(values);
+  });
+  suite.test("cyclic entry diagnostics", (): void => {
+    const node = new Node();
+    node.next = node;
+    const values: Map<string, Node> = makeMap[string, Node]();
+    values["loop"] = node;
+    expectMap(values).not.toHaveEntries(values);
+  });
+  suite.test("explicit location", (): void => {
+    withTestLocation("domain-check.km", 42, (): void => { expectMap(actual).toHaveEntries(wrong); });
+  });
+  suite.test("later case", (): void => {
+    expect(actual["value"]).toEqual(42);
+    expect(required["value"]).toEqual(42);
+    fmt.Println("map-entries-failing-later");
+  });
+  suite.runAndExit();
+}

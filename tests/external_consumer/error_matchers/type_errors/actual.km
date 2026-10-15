@@ -1,0 +1,4 @@
+import { expectErrorValue } from "vasest";
+function main(): void {
+  expectErrorValue(42).toBeNil();
+}

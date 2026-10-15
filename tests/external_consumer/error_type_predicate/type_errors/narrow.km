@@ -1,0 +1,3 @@
+import { expectErrorValue } from "vasest";
+import go os from "os";
+function main(): void { expectErrorValue(nil).toMatchTypeSatisfying<error>((value: *os.PathError): boolean => { return true; }); }

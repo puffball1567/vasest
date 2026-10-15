@@ -1,0 +1,24 @@
+import { Suite, TestContext, expectEqual, withTestLocation } from "vasest";
+import go errors from "errors";
+
+function main(): void {
+  const suite = new Suite("source locations");
+  suite.test("explicit position", (): void => {
+    withTestLocation("locations/locations.test.km", 8, (): void => {
+      throw errors.New("manual <&> failure");
+    });
+  });
+  suite.test("generated position", (): void => {
+    expectEqual(1, 2);
+  });
+  suite.testWithContext("cleanup position", (context: TestContext): void => {
+    context.cleanup((): void => {
+      withTestLocation("locations/locations.test.km", 17, (): void => {
+        throw errors.New("");
+      });
+    });
+  });
+  suite.test("unlocated throw", (): void => { throw errors.New("ordinary throw"); });
+  suite.test("later case passes", (): void => {});
+  suite.run();
+}

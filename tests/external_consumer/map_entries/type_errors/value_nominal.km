@@ -1,0 +1,8 @@
+import { MapExpectation, expectMap } from "vasest";
+type UserID = distinct int;
+type OrderID = distinct int;
+function main(): void {
+  const actual: Map<string, UserID> = makeMap[string, UserID]();
+  const required: Map<string, OrderID> = makeMap[string, OrderID]();
+  expectMap(actual).toHaveEntries(required);
+}

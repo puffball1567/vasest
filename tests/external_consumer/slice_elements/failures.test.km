@@ -1,0 +1,43 @@
+import { Suite, TestContext, expectSlice, withTestLocation } from "vasest";
+import go errors from "errors";
+import go fmt from "fmt";
+import go os from "os";
+
+class Node {
+  public value:int;
+  public next:Node;
+  constructor(value:int){this.value=value;this.next=nil;}
+}
+
+function main():void {
+  const suite=new Suite("selected slice element failures");
+  const values:int[]=[42];
+  suite.afterEach(():void=>{fmt.Println("slice-element-afterEach");});
+  suite.afterAll(():void=>{fmt.Println("slice-element-afterAll");});
+  suite.testWithContext("element value mismatch",(context:TestContext):void=>{
+    context.cleanup(():void=>{fmt.Println("slice-element-cleanup");});
+    if(os.Getenv("VASEST_SLICE_ELEMENT_FIXED")=="1"){
+      expectSlice<int>(values).toHaveElement(0,42);fmt.Println("slice-element-fixed");
+    }else{expectSlice<int>(values).toHaveElement(0,43);}
+  });
+  suite.test("negated element match",():void=>{expectSlice<int>(values).not.toHaveElement(0,42);});
+  suite.test("missing element",():void=>{expectSlice<int>(values).toHaveElement(1,0);});
+  suite.test("negative element index",():void=>{expectSlice<int>(values).not.toHaveElement(-1,42);});
+  suite.test("predicate mismatch",():void=>{expectSlice<int>(values).toHaveElementSatisfying(0,(value:int):boolean=>{return value<0;});});
+  suite.test("negated predicate match",():void=>{expectSlice<int>(values).not.toHaveElementSatisfying(0,(value:int):boolean=>{return value>0;});});
+  suite.test("missing predicate element",():void=>{expectSlice<int>(values).toHaveElementSatisfying(1,(value:int):boolean=>{throw errors.New("missing element callback ran");});});
+  suite.test("nil predicate",():void=>{expectSlice<int>(values).toHaveElementSatisfying(0,nil);});
+  suite.test("negated nil predicate",():void=>{expectSlice<int>(values).not.toHaveElementSatisfying(1,nil);});
+  suite.test("thrown predicate",():void=>{expectSlice<int>(values).toHaveElementSatisfying(0,(value:int):boolean=>{throw errors.New("selected element callback failed");});});
+  suite.test("explicit callback location",():void=>{
+    expectSlice<int>(values).not.toHaveElementSatisfying(0,(value:int):boolean=>{
+      withTestLocation("domain-check.km",42,():void=>{throw errors.New("domain element failed");});return false;
+    });
+  });
+  suite.test("cyclic element mismatch",():void=>{
+    const first=new Node(42);const second=new Node(43);first.next=first;second.next=second;
+    expectSlice<Node>([first]).toHaveElement(0,second);
+  });
+  suite.test("later case",():void=>{fmt.Println("slice-element-failing-later");});
+  suite.runAndExit();
+}

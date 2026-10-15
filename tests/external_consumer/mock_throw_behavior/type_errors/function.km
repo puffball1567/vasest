@@ -1,0 +1,2 @@
+import { MockFn } from "vasest";
+function main(): void { new MockFn<int, string>((value: int): string => { return "normal"; }).throwError(42); }

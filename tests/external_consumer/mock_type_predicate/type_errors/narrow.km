@@ -1,0 +1,3 @@
+import { expectMockOutcome } from "vasest";
+import go os from "os";
+function main(): void { expectMockOutcome(nil).toHaveThrownTypeSatisfying<error>((value: *os.PathError): boolean => { return true; }); }

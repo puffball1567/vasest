@@ -1,0 +1,9 @@
+import { Suite, expectEqual, expectTrue } from "vasest";
+
+function main(): void {
+  const suite = new Suite("failure handling");
+  suite.test("first failure", (): void => { expectEqual(1, 2); });
+  suite.test("later test still runs", (): void => { expectTrue(true); });
+  suite.test("second failure", (): void => { expectTrue(false); });
+  suite.runAndExit();
+}

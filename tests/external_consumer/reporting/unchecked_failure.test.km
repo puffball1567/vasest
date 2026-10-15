@@ -1,0 +1,9 @@
+import { Suite, expectTrue } from "vasest";
+
+function main(): void {
+  const suite = new Suite("unchecked suite");
+  suite.test("fails", (): void => {
+    expectTrue(false);
+  });
+  suite.run();
+}
