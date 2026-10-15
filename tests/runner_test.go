@@ -465,6 +465,18 @@ func writeWatchFile(t *testing.T, path, content string) {
 	}
 }
 
+func replaceWatchConfig(t *testing.T, path string, data []byte) {
+	t.Helper()
+	// Publish one complete edit; truncation must not create a second watch event.
+	pending := path + ".next"
+	if err := os.WriteFile(pending, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(pending, path); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func signatureFor(t *testing.T, root string, snapshots bool) string {
 	t.Helper()
 	signature, err := watchSignature([]string{root}, snapshots)
@@ -2145,9 +2157,7 @@ function main(): void {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(config, data, 0600); err != nil {
-			t.Fatal(err)
-		}
+		replaceWatchConfig(t, config, data)
 	}
 	writeConfig(first, "first", "json", 1)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -2232,7 +2242,7 @@ function main(): void {
 			if !event.NoMatch || event.Jobs != 2 {
 				t.Fatalf("edited path/filter/jobs not applied: %#v", event)
 			}
-			os.WriteFile(config, []byte("invalid JSON"), 0600)
+			replaceWatchConfig(t, config, []byte("invalid JSON"))
 			stage = 2
 		case 3:
 			if event.PassedFiles != 3 || event.NoMatch || event.Jobs != 2 {
@@ -2570,9 +2580,7 @@ function main(): void {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(config, data, 0600); err != nil {
-			t.Fatal(err)
-		}
+		replaceWatchConfig(t, config, data)
 	}
 	writeConfig([]string{"first.test.km"}, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
