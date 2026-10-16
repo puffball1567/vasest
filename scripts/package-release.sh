@@ -31,6 +31,7 @@ export GOCACHE="$temp_dir/go-cache"
 keika_command=${KEIKA:-keika}
 
 cd "$project_dir"
+"$keika_command" deps lock
 "$keika_command" check vasest.km
 "$keika_command" emit-go -package main -o "$temp_dir/main.go" cmd/vasest/main.km
 cp go.mod "$temp_dir/go.mod"

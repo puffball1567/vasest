@@ -23,6 +23,7 @@ Use `vasest` as its import alias. For a source installation, clone the release a
 git clone --branch v0.1.0 https://github.com/puffball1567/vasest.git
 cd vasest
 mkdir -p build
+keika deps lock
 keika build -o build/vasest cmd/vasest/main.km
 ```
 
@@ -1108,6 +1109,7 @@ Watch mode tracks the active configuration file, including an explicit file outs
 Build the runner from this repository:
 
 ```sh
+keika deps lock
 keika build -o build/vasest cmd/vasest/main.km
 ```
 
