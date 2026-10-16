@@ -3,9 +3,16 @@ name: Main pull request policy
 on:
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: Main pull request number to verify at this exact head
+        required: true
+        type: string
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   require-approved-source:
@@ -15,13 +22,24 @@ jobs:
     steps:
       - name: Verify pull request source
         env:
-          HEAD_REF: ${{ github.head_ref }}
-          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
-          REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pull_request }}
         run: |
           set -eu
-          test "$HEAD_REPOSITORY" = "$REPOSITORY"
-          case "$HEAD_REF" in
+          case "$PR_NUMBER" in
+            ''|*[!0-9]*) echo "::error::A pull request number is required."; exit 1 ;;
+          esac
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" > "$RUNNER_TEMP/pull-request.json"
+          pr_file="$RUNNER_TEMP/pull-request.json"
+          test "$(jq -r .state "$pr_file")" = open
+          test "$(jq -r .base.ref "$pr_file")" = main
+          test "$(jq -r .head.repo.full_name "$pr_file")" = "$GITHUB_REPOSITORY"
+          head_ref=$(jq -r .head.ref "$pr_file")
+          case "$head_ref" in
             devel|hotfix/*) ;;
             *) echo "::error::Pull requests to main must come from devel or hotfix/*."; exit 1 ;;
           esac
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            test "$head_ref" = "$GITHUB_REF_NAME"
+            test "$(jq -r .head.sha "$pr_file")" = "$GITHUB_SHA"
+          fi
