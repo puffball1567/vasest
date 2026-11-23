@@ -12,7 +12,7 @@ function main(): void {
   suite.beforeAll((): void => { expectTrue(os.Getenv("VASEST_RERUN_SHARED") != "1"); });
   suite.test("case", (): void => { expectTrue(os.Getenv("VASEST_RERUN_FIXED") == "1"); });
   suite.test("case extra", (): void => { fmt.Println("EXTRA_BODY"); });
-  suite.testEach([0, 1], (row: int): string => { return fmt.Sprintf("row %d", row); }, (row: int): void => {
+  suite.testEach([0, 1], (row: int): bstring => { return fmt.Sprintf("row %d", row); }, (row: int): void => {
     expectTrue(row == 0 || os.Getenv("VASEST_RERUN_FIXED") == "1");
   });
   suite.runAndExit();

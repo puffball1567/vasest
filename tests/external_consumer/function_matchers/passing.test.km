@@ -10,7 +10,7 @@ class CodedError implements error {
     this.code = code;
   }
 
-  public function Error(): string {
+  public function Error(): bstring {
     return fmt.Sprintf("code %d", this.code);
   }
 }
@@ -28,7 +28,7 @@ function main(): void {
     matcher.toThrowMessage("木");
     matcher.toThrowCause(cause);
     let found: error = nil;
-    matcher.toThrowType<error>(&found);
+    matcher.toThrowType<error>(&found, (source, target) => errors.As(source, target));
     expectErrorValue(found).toMatchCause(cause);
     matcher.not.toThrowMessage("missing");
     matcher.not.toThrowCause(errors.New("same message"));
@@ -38,14 +38,14 @@ function main(): void {
   suite.test("native error extraction with explicit type", (): void => {
     const original = os.PathError { Op: "open", Path: "missing", Err: os.ErrNotExist };
     let found: *os.PathError = nil;
-    expectFunction((): void => { throw fmt.Errorf("load: %w", &original); }).toThrowType<*os.PathError>(&found);
+    expectFunction((): void => { throw fmt.Errorf("load: %w", &original); }).toThrowType<*os.PathError>(&found, (source, target) => errors.As(source, target));
     expect(found.Path).toEqual("missing");
   });
   suite.test("application error extraction with inference", (): void => {
     const original = new CodedError(42);
-    let found: CodedError = nil;
-    expectFunction((): void => { throw fmt.Errorf("load: %w", original); }).toThrowType(&found);
-    expect(found).toBe(original);
+    let found: CodedError | null = null;
+    expectFunction((): void => { throw fmt.Errorf("load: %w", original); }).toThrowType(&found, (source, target) => errors.As(source, target));
+    expect<CodedError | null>(found).toBe(original);
   });
   suite.test("non-throwing functions pass negative matchers", (): void => {
     let calls = 0;

@@ -37,9 +37,9 @@ func TestFunctionTypePredicateNegatesThrowTypeAndPredicate(t *testing.T) {
 					}
 					check := func() {
 						if negated {
-							NegatedFunctionExpectationToThrowTypeSatisfying(matcher.Not, predicate)
+							NegatedFunctionExpectationToThrowTypeSatisfying(matcher.Not, predicate, testErrorExtractor)
 						} else {
-							FunctionExpectationToThrowTypeSatisfying(matcher, predicate)
+							FunctionExpectationToThrowTypeSatisfying(matcher, predicate, testErrorExtractor)
 						}
 					}
 					if (threw && present && accepted) == negated {
@@ -69,28 +69,30 @@ func TestFunctionTypePredicateNativeSelectionAndFreshBody(t *testing.T) {
 			panic(__kinmokuseiThrown{err: original})
 		}
 	})
-	FunctionExpectationToThrowTypeSatisfying(matcher, func(value *predicateDomainError) bool { value.Code++; return value == original })
-	FunctionExpectationToThrowTypeSatisfying(matcher, func(value *predicateDomainError) bool { return value.Code == 1<<60+2 })
-	NegatedFunctionExpectationToThrowTypeSatisfying(matcher.Not, func(*predicateDomainError) bool { t.Fatal("normal return ran predicate"); return true })
+	FunctionExpectationToThrowTypeSatisfying(matcher, func(value *predicateDomainError) bool { value.Code++; return value == original }, testErrorExtractor)
+	FunctionExpectationToThrowTypeSatisfying(matcher, func(value *predicateDomainError) bool { return value.Code == 1<<60+2 }, testErrorExtractor)
+	NegatedFunctionExpectationToThrowTypeSatisfying(matcher.Not, func(*predicateDomainError) bool { t.Fatal("normal return ran predicate"); return true }, testErrorExtractor)
 	if calls != 3 {
 		t.Fatal(calls)
 	}
 	wrapped := errors.Join(errors.New("other"), original)
-	FunctionExpectationToThrowTypeSatisfying(expectFunction(func() { panic(__kinmokuseiThrown{err: wrapped}) }), func(value *predicateDomainError) bool { return value == original })
-	FunctionExpectationToThrowTypeSatisfying[fmt.Stringer](expectFunction(func() { panic(__kinmokuseiThrown{err: wrapped}) }), func(value fmt.Stringer) bool { return value == original })
+	FunctionExpectationToThrowTypeSatisfying(expectFunction(func() { panic(__kinmokuseiThrown{err: wrapped}) }), func(value *predicateDomainError) bool { return value == original }, testErrorExtractor)
+	FunctionExpectationToThrowTypeSatisfying[fmt.Stringer](expectFunction(func() { panic(__kinmokuseiThrown{err: wrapped}) }), func(value fmt.Stringer) bool { return value == original }, testErrorExtractor[fmt.Stringer])
 	first := &predicateDomainError{Code: 1}
-	NegatedFunctionExpectationToThrowTypeSatisfying(expectFunction(func() { panic(__kinmokuseiThrown{err: errors.Join(first, original)}) }).Not, func(value *predicateDomainError) bool { return value == original })
-	FunctionExpectationToThrowTypeSatisfying(expectFunction(func() { panic(__kinmokuseiThrown{err: (*predicateDomainError)(nil)}) }), func(value *predicateDomainError) bool { return value == nil })
+	NegatedFunctionExpectationToThrowTypeSatisfying(expectFunction(func() { panic(__kinmokuseiThrown{err: errors.Join(first, original)}) }).Not, func(value *predicateDomainError) bool { return value == original }, testErrorExtractor)
+	FunctionExpectationToThrowTypeSatisfying(expectFunction(func() { panic(__kinmokuseiThrown{err: (*predicateDomainError)(nil)}) }), func(value *predicateDomainError) bool { return value == nil }, testErrorExtractor)
 	nilThrow := expectFunction(func() { panic(__kinmokuseiThrown{err: nil}) })
-	NegatedFunctionExpectationToThrowTypeSatisfying[error](nilThrow.Not, func(error) bool { t.Fatal("nil payload matched error interface"); return true })
-	assertThrownMessage(t, "assignable to error", func() { FunctionExpectationToThrowTypeSatisfying[error](nilThrow, func(error) bool { return true }) })
+	NegatedFunctionExpectationToThrowTypeSatisfying[error](nilThrow.Not, func(error) bool { t.Fatal("nil payload matched error interface"); return true }, testErrorExtractor[error])
+	assertThrownMessage(t, "assignable to error", func() {
+		FunctionExpectationToThrowTypeSatisfying[error](nilThrow, func(error) bool { return true }, testErrorExtractor[error])
+	})
 	values := assertionSliceError{1, 2}
-	FunctionExpectationToThrowTypeSatisfying(expectFunction(func() { panic(__kinmokuseiThrown{err: values}) }), func(value assertionSliceError) bool { value[0] = 7; return len(value) == 2 })
+	FunctionExpectationToThrowTypeSatisfying(expectFunction(func() { panic(__kinmokuseiThrown{err: values}) }), func(value assertionSliceError) bool { value[0] = 7; return len(value) == 2 }, testErrorExtractor)
 	if values[0] != 7 || original.Reads != 0 {
 		t.Fatal(values, original.Reads)
 	}
 	// Body skip is a thrown outcome; predicate skip is enclosing-suite control flow.
-	FunctionExpectationToThrowTypeSatisfying[error](expectFunction(func() { skipTest("body unavailable") }), func(value error) bool { return testSkipReason(value) == "body unavailable" })
+	FunctionExpectationToThrowTypeSatisfying[error](expectFunction(func() { skipTest("body unavailable") }), func(value error) bool { return testSkipReason(value) == "body unavailable" }, testErrorExtractor[error])
 }
 
 func TestFunctionTypePredicateCustomAs(t *testing.T) {
@@ -100,27 +102,31 @@ func TestFunctionTypePredicateCustomAs(t *testing.T) {
 	actual := predicateAsError{as: func(target any) bool { extractions++; *target.(**predicateDomainError) = original; return matched }}
 	matcher := expectFunction(func() { bodies++; panic(__kinmokuseiThrown{err: actual}) })
 	predicate := func(value *predicateDomainError) bool { predicates++; return value == original }
-	FunctionExpectationToThrowTypeSatisfying(matcher, predicate)
+	FunctionExpectationToThrowTypeSatisfying(matcher, predicate, testErrorExtractor)
 	matched = false
-	NegatedFunctionExpectationToThrowTypeSatisfying(matcher.Not, predicate)
+	NegatedFunctionExpectationToThrowTypeSatisfying(matcher.Not, predicate, testErrorExtractor)
 	if bodies != 2 || extractions != 2 || predicates != 1 {
 		t.Fatal(bodies, extractions, predicates)
 	}
 	nilMatch := predicateAsError{as: func(target any) bool { *target.(*fmt.Stringer) = nil; return true }}
-	FunctionExpectationToThrowTypeSatisfying[fmt.Stringer](expectFunction(func() { panic(__kinmokuseiThrown{err: nilMatch}) }), func(value fmt.Stringer) bool { return value == nil })
+	FunctionExpectationToThrowTypeSatisfying[fmt.Stringer](expectFunction(func() { panic(__kinmokuseiThrown{err: nilMatch}) }), func(value fmt.Stringer) bool { return value == nil }, testErrorExtractor[fmt.Stringer])
 }
 
 func TestFunctionTypePredicateValidationBeforeBodyAndCallerLocation(t *testing.T) {
 	bodies, predicates := 0, 0
 	matcher := expectFunction(func() { bodies++ })
-	assertThrownMessage(t, "predicate must not be nil", func() { FunctionExpectationToThrowTypeSatisfying[error](matcher, nil) })
-	assertThrownMessage(t, "predicate must not be nil", func() { NegatedFunctionExpectationToThrowTypeSatisfying[error](matcher.Not, nil) })
+	assertThrownMessage(t, "predicate must not be nil", func() { FunctionExpectationToThrowTypeSatisfying[error](matcher, nil, testErrorExtractor[error]) })
+	assertThrownMessage(t, "predicate must not be nil", func() {
+		NegatedFunctionExpectationToThrowTypeSatisfying[error](matcher.Not, nil, testErrorExtractor[error])
+	})
 	invalid := func(int) bool { predicates++; return true }
-	assertThrownMessage(t, "toThrowTypeSatisfying requires an error type or interface", func() { FunctionExpectationToThrowTypeSatisfying(matcher, invalid) })
-	assertThrownMessage(t, "toThrowTypeSatisfying requires an error type or interface", func() { NegatedFunctionExpectationToThrowTypeSatisfying(matcher.Not, invalid) })
+	assertThrownMessage(t, "toThrowTypeSatisfying requires an error type or interface", func() { FunctionExpectationToThrowTypeSatisfying(matcher, invalid, testErrorExtractor) })
+	assertThrownMessage(t, "toThrowTypeSatisfying requires an error type or interface", func() { NegatedFunctionExpectationToThrowTypeSatisfying(matcher.Not, invalid, testErrorExtractor) })
 	valid := func(error) bool { predicates++; return true }
-	assertThrownMessage(t, "body must not be nil", func() { FunctionExpectationToThrowTypeSatisfying(expectFunction(nil), valid) })
-	assertThrownMessage(t, "body must not be nil", func() { NegatedFunctionExpectationToThrowTypeSatisfying(expectFunction(nil).Not, valid) })
+	assertThrownMessage(t, "body must not be nil", func() { FunctionExpectationToThrowTypeSatisfying(expectFunction(nil), valid, testErrorExtractor) })
+	assertThrownMessage(t, "body must not be nil", func() {
+		NegatedFunctionExpectationToThrowTypeSatisfying(expectFunction(nil).Not, valid, testErrorExtractor)
+	})
 	if bodies != 0 || predicates != 0 {
 		t.Fatal("invalid matcher invoked callback", bodies, predicates)
 	}
@@ -133,43 +139,43 @@ func TestFunctionTypePredicateValidationBeforeBodyAndCallerLocation(t *testing.T
 	checks := []func(){
 		func() {
 			record()
-			FunctionExpectationToThrowTypeSatisfying[error](thrown, func(error) bool { return false })
+			FunctionExpectationToThrowTypeSatisfying[error](thrown, func(error) bool { return false }, testErrorExtractor[error])
 		},
 		func() {
 			record()
-			NegatedFunctionExpectationToThrowTypeSatisfying[error](thrown.Not, valid)
+			NegatedFunctionExpectationToThrowTypeSatisfying[error](thrown.Not, valid, testErrorExtractor[error])
 		},
 		func() {
 			record()
-			FunctionExpectationToThrowTypeSatisfying[error](matcher, valid)
+			FunctionExpectationToThrowTypeSatisfying[error](matcher, valid, testErrorExtractor[error])
 		},
 		func() {
 			record()
-			FunctionExpectationToThrowTypeSatisfying[*predicateDomainError](thrown, func(*predicateDomainError) bool { return true })
+			FunctionExpectationToThrowTypeSatisfying[*predicateDomainError](thrown, func(*predicateDomainError) bool { return true }, testErrorExtractor[*predicateDomainError])
 		},
 		func() {
 			record()
-			FunctionExpectationToThrowTypeSatisfying[error](matcher, nil)
+			FunctionExpectationToThrowTypeSatisfying[error](matcher, nil, testErrorExtractor[error])
 		},
 		func() {
 			record()
-			NegatedFunctionExpectationToThrowTypeSatisfying[error](matcher.Not, nil)
+			NegatedFunctionExpectationToThrowTypeSatisfying[error](matcher.Not, nil, testErrorExtractor[error])
 		},
 		func() {
 			record()
-			FunctionExpectationToThrowTypeSatisfying(matcher, invalid)
+			FunctionExpectationToThrowTypeSatisfying(matcher, invalid, testErrorExtractor)
 		},
 		func() {
 			record()
-			NegatedFunctionExpectationToThrowTypeSatisfying(matcher.Not, invalid)
+			NegatedFunctionExpectationToThrowTypeSatisfying(matcher.Not, invalid, testErrorExtractor)
 		},
 		func() {
 			record()
-			FunctionExpectationToThrowTypeSatisfying(expectFunction(nil), valid)
+			FunctionExpectationToThrowTypeSatisfying(expectFunction(nil), valid, testErrorExtractor)
 		},
 		func() {
 			record()
-			NegatedFunctionExpectationToThrowTypeSatisfying(expectFunction(nil).Not, valid)
+			NegatedFunctionExpectationToThrowTypeSatisfying(expectFunction(nil).Not, valid, testErrorExtractor)
 		},
 	}
 	for _, check := range checks {
@@ -192,9 +198,9 @@ func TestFunctionTypePredicatePreservesAsAndPredicateExceptions(t *testing.T) {
 				predicate := func(*predicateDomainError) bool { body(); return false }
 				check := func() {
 					if negated {
-						NegatedFunctionExpectationToThrowTypeSatisfying(matcher.Not, predicate)
+						NegatedFunctionExpectationToThrowTypeSatisfying(matcher.Not, predicate, testErrorExtractor)
 					} else {
-						FunctionExpectationToThrowTypeSatisfying(matcher, predicate)
+						FunctionExpectationToThrowTypeSatisfying(matcher, predicate, testErrorExtractor)
 					}
 				}
 				if got := expectThrows(check); got != cause {
@@ -238,15 +244,15 @@ func TestFunctionTypePredicateControlFlowCleanup(t *testing.T) {
 					if phase == "As" {
 						selected := func(*predicateDomainError) bool { return !negated }
 						if negated {
-							NegatedFunctionExpectationToThrowTypeSatisfying(matcher.Not, selected)
+							NegatedFunctionExpectationToThrowTypeSatisfying(matcher.Not, selected, testErrorExtractor)
 						} else {
-							FunctionExpectationToThrowTypeSatisfying(matcher, selected)
+							FunctionExpectationToThrowTypeSatisfying(matcher, selected, testErrorExtractor)
 						}
 					} else {
 						if negated {
-							NegatedFunctionExpectationToThrowTypeSatisfying[error](matcher.Not, predicate)
+							NegatedFunctionExpectationToThrowTypeSatisfying[error](matcher.Not, predicate, testErrorExtractor[error])
 						} else {
-							FunctionExpectationToThrowTypeSatisfying[error](matcher, predicate)
+							FunctionExpectationToThrowTypeSatisfying[error](matcher, predicate, testErrorExtractor[error])
 						}
 					}
 					if phase != "body" || nativePanic {

@@ -5,8 +5,8 @@ import go os from "os";
 
 class Node {
   public value: int;
-  public next: Node;
-  constructor(value: int) { this.value = value; this.next = nil; }
+  public next: Node | null;
+  constructor(value: int) { this.value = value; this.next = null; }
 }
 
 function main(): void {

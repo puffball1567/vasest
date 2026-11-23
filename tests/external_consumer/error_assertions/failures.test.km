@@ -19,19 +19,19 @@ function main(): void {
   suite.test("wrong type", (): void => {
     let found: *os.PathError = nil;
     withTestLocation("error-checks.test.km", 20, (): void => {
-      expectErrorAs(errors.New("ordinary error"), &found);
+      expectErrorAs(errors.New("ordinary error"), &found, (source, target) => errors.As(source, target));
     });
   });
   suite.test("invalid target", (): void => {
     let found = 0;
     withTestLocation("error-checks.test.km", 30, (): void => {
-      expectErrorAs(errors.New("ordinary error"), &found);
+      expectErrorAs(errors.New("ordinary error"), &found, (source, target) => errors.As(source, target));
     });
   });
   suite.test("nil target", (): void => {
     let found: *error = nil;
     withTestLocation("error-checks.test.km", 40, (): void => {
-      expectErrorAs(nil, found);
+      expectErrorAs(nil, found, (source, target) => errors.As(source, target));
     });
   });
   suite.test("later case", (): void => {

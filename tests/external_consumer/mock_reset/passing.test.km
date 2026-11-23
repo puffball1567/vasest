@@ -14,16 +14,16 @@ function main(): void {
   suite.test("function reset replaces default queue and histories", (): void => {
     const original = new Record(1);
     const fresh = new Record(2);
-    const mock = new MockFn<UserID, Record>((value: UserID): Record => { return original; });
+    const mock = new MockFn<UserID, Record | null>((value: UserID): Record | null => { return original; });
     mock.invoke(UserID(42));
     mock.returnValueOnce(original);
-    mock.implementOnce((value: UserID): Record => { fmt.Println("unreachable-reset-queue"); return original; });
+    mock.implementOnce((value: UserID): Record | null => { fmt.Println("unreachable-reset-queue"); return original; });
     const oldCalls = mock.calls();
     const oldResults = mock.results();
     const calls = expectMock<UserID>(mock);
-    const returns = expectMockReturn<Record>(mock);
+    const returns = expectMockReturn<Record | null>(mock);
     const outcomes = expectMockOutcome(mock);
-    const replacement: (value: UserID) => Record = (value: UserID): Record => { expect(value).toEqual(UserID(1152921504606846977)); return fresh; };
+    const replacement: (value: UserID) => Record | null = (value: UserID): Record | null => { expect(value).toEqual(UserID(1152921504606846977)); return fresh; };
     mock.reset(replacement);
     calls.not.toHaveBeenCalled(); returns.not.toHaveReturned(); outcomes.not.toHaveThrown();
     expect(len(mock.results())).toEqual(0);
@@ -31,7 +31,7 @@ function main(): void {
     expect(mock.invoke(UserID(1152921504606846977))).toBe(fresh);
     calls.toHaveBeenCalledWith(UserID(1152921504606846977)); returns.toHaveReturnedWith(fresh);
     expect(oldCalls[0]).toEqual(UserID(42)); expect(oldResults[0].value).toBe(original);
-    mock.returnValueOnce(nil);
+    mock.returnValueOnce(null);
     mock.clearCalls();
     expect(mock.invoke(UserID(1152921504606846977))).toBeNil();
     expect(mock.invoke(UserID(1152921504606846977))).toBe(fresh);
@@ -39,14 +39,14 @@ function main(): void {
   suite.test("nil reset preserves behavior and history", (): void => {
     const mock = new MockFn<int, int>((value: int): int => { return value + 1; });
     mock.invoke(1); mock.returnValueOnce(42);
-    expectFunction((): void => { mock.reset(nil); }).toThrowMessage("must not be nil");
+    expectFunction((): void => { mock.reset(null); }).toThrowMessage("must not be nil");
     expect(mock.callCount()).toEqual(1);
     expect(mock.invoke(2)).toEqual(42); expect(mock.invoke(3)).toEqual(4);
     let total = 0;
     const action = new MockAction<int>((value: int): void => { total += value; });
     action.invoke(1);
     action.implementOnce((value: int): void => { total += value * 10; });
-    expectFunction((): void => { action.reset(nil); }).toThrowMessage("must not be nil");
+    expectFunction((): void => { action.reset(null); }).toThrowMessage("must not be nil");
     expect(action.callCount()).toEqual(1); action.invoke(2); action.invoke(3); expect(total).toEqual(24);
   });
   suite.test("reset inside function discards active outer result", (): void => {

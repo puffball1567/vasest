@@ -6,9 +6,11 @@ type UserID = distinct uint64;
 
 class Node {
   public value: int;
-  public next: Node;
-  constructor(value: int) { this.value = value; this.next = nil; }
+  public next: Node | null;
+  constructor(value: int) { this.value = value; this.next = null; }
 }
+
+alias OptionalNode = Node | null;
 
 function main(): void {
   const suite = new Suite("typed slice containment");
@@ -59,11 +61,11 @@ function main(): void {
     const second = new Node(42);
     first.next = first;
     second.next = second;
-    const actual: Node[] = [nil, first, first];
-    const required: Node[] = [second, second];
-    expectSlice<Node>(actual).toContainAll(required);
+    const actual: OptionalNode[] = [null, first, first];
+    const required: OptionalNode[] = [second, second];
+    expectSlice<OptionalNode>(actual).toContainAll(required);
     second.value = 43;
-    expectSlice<Node>(actual).not.toContainAll(required);
+    expectSlice<OptionalNode>(actual).not.toContainAll(required);
     expect(first.next).toBe(first);
     expect(first.value).toEqual(42);
   });

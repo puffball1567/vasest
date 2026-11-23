@@ -7,8 +7,8 @@ type Score = distinct int64;
 
 class Node {
   public value: int;
-  public next: Node;
-  constructor(value: int) { this.value = value; this.next = nil; }
+  public next: Node | null;
+  constructor(value: int) { this.value = value; this.next = null; }
 }
 
 function main(): void {
@@ -54,7 +54,7 @@ function main(): void {
     actual[first] = first;
     required[first] = second;
     expectMap<Node, Node>(actual).toHaveEntries(required);
-    expectFunction((): void => { expectMap(actual).not.toHaveEntries(required); }).toThrowMessage("<cyclic value>");
+    expectFunction((): void => { expectMap(actual).not.toHaveEntries(required); }).toThrowMessage("possible cyclic value");
     const differentKey: Map<Node, Node> = makeMap[Node, Node]();
     differentKey[second] = second;
     expectMap(actual).not.toHaveEntries(differentKey);

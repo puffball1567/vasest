@@ -4,7 +4,7 @@ import go os from "os";
 
 function main(): void {
   const suite = new Suite("registered cleanup");
-  let savedPath = "";
+  let savedPath: bstring = "";
   let resourceActive = false;
   let hookFails = false;
   const [previousEnv, envExisted] = os.LookupEnv("VASEST_CONTEXT_FIXTURE");
@@ -37,10 +37,10 @@ function main(): void {
     context.cleanup((): void => {
       resourceActive = false;
     });
-    expectThrowsMessage((): void => { context.cleanup(nil); }, "cleanup body must not be nil");
+    expectThrowsMessage((): void => { context.cleanup(null); }, "cleanup body must not be nil");
   });
   suite.testWithContext("success: cleanup can register more work", (context: TestContext): void => {
-    let order: string[] = [];
+    let order: bstring[] = [];
     context.cleanup((): void => { expectEqual(order, ["second", "nested"]); });
     context.cleanup((): void => {
       order = append(order, "second");

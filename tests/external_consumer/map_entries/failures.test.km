@@ -3,8 +3,8 @@ import go fmt from "fmt";
 import go math from "math";
 
 class Node {
-  public next: Node;
-  constructor() { this.next = nil; }
+  public next: Node | null;
+  constructor() { this.next = null; }
 }
 
 function main(): void {

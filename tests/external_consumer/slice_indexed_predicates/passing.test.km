@@ -8,6 +8,10 @@ class Record {
   constructor(value: int) { this.value = value; }
 }
 
+alias IndexedElementPredicate = (value: UserID, index: int) => boolean;
+
+alias OptionalRecord = Record | null;
+
 function main(): void {
   const suite = new Suite("typed slice indexed predicate matchers");
   suite.test("explicit native types and short circuit evaluation", (): void => {
@@ -34,12 +38,12 @@ function main(): void {
       expect<UserID>(value).toEqual(values[index]);
       return index == 2;
     };
-    const anyCheck: (predicate: (value: UserID, index: int) => boolean) => void = matcher.toSatisfyAnyIndexed;
+    const anyCheck: (predicate: IndexedElementPredicate | null) => void = matcher.toSatisfyAnyIndexed;
     anyCheck(atLast);
     expect<int[]>(visited).toEqual([0, 1, 2]);
-    const allCheck: (predicate: (value: UserID, index: int) => boolean) => void = matcher.toSatisfyAllIndexed;
+    const allCheck: (predicate: IndexedElementPredicate | null) => void = matcher.toSatisfyAllIndexed;
     allCheck((value: UserID, index: int): boolean => { return value == values[index]; });
-    const negativeCheck: (predicate: (value: UserID, index: int) => boolean) => void = matcher.not.toSatisfyAnyIndexed;
+    const negativeCheck: (predicate: IndexedElementPredicate | null) => void = matcher.not.toSatisfyAnyIndexed;
     negativeCheck((value: UserID, index: int): boolean => { return index > 2; });
     new NegatedSliceExpectation<UserID>(values).toSatisfyAllIndexed((value: UserID, index: int): boolean => { return index < 2; });
   });
@@ -56,9 +60,9 @@ function main(): void {
   });
   suite.test("application references and nested collection values", (): void => {
     const original = new Record(42);
-    const records: Record[] = [nil, original];
-    expectSlice<Record>(records).toSatisfyAnyIndexed((value: Record, index: int): boolean => {
-      if (value == nil) { return false; }
+    const records: OptionalRecord[] = [null, original];
+    expectSlice<OptionalRecord>(records).toSatisfyAnyIndexed((value: OptionalRecord, index: int): boolean => {
+      if (value == null) { return false; }
       value.value++;
       return value == original;
     });

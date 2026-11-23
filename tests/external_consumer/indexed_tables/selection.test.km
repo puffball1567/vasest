@@ -6,14 +6,14 @@ type UserID = distinct int64;
 function main(): void {
   const rows: UserID[] = [UserID(42), UserID(42), UserID(42)];
   const suite = new Suite("indexed selection");
-  suite.testEachIndexed<UserID>(rows, (value: UserID, index: int): string => { return fmt.Sprintf("plain %d", index); }, (value: UserID, index: int): void => {
+  suite.testEachIndexed<UserID>(rows, (value: UserID, index: int): bstring => { return fmt.Sprintf("plain %d", index); }, (value: UserID, index: int): void => {
     expect(value).toEqual(UserID(42)); fmt.Printf("indexed-selected-plain-%d\n", index);
   });
-  suite.testEachIndexedWithContext<UserID>(rows, (value: UserID, index: int): string => { return fmt.Sprintf("context %d", index); }, (value: UserID, index: int, context: TestContext): void => {
+  suite.testEachIndexedWithContext<UserID>(rows, (value: UserID, index: int): bstring => { return fmt.Sprintf("context %d", index); }, (value: UserID, index: int, context: TestContext): void => {
     context.cleanup((): void => { fmt.Printf("indexed-selected-context-cleanup-%d\n", index); });
     fmt.Printf("indexed-selected-context-%d\n", index);
   });
-  suite.testEachIndexedWithFixture<UserID, int>(rows, (value: UserID, index: int): string => { return fmt.Sprintf("fixture %d", index); }, (value: UserID, index: int, context: TestContext): int => {
+  suite.testEachIndexedWithFixture<UserID, int>(rows, (value: UserID, index: int): bstring => { return fmt.Sprintf("fixture %d", index); }, (value: UserID, index: int, context: TestContext): int => {
     fmt.Printf("indexed-selected-setup-%d\n", index);
     context.cleanup((): void => { fmt.Printf("indexed-selected-fixture-cleanup-%d\n", index); });
     return index;
@@ -21,10 +21,10 @@ function main(): void {
     expect(fixture).toEqual(index); fmt.Printf("indexed-selected-fixture-%d\n", index);
   });
   suite.runAndExit();
-  const shared = new FixtureSuite<string>("indexed shared selection", (context: TestContext): string => {
+  const shared = new FixtureSuite<bstring>("indexed shared selection", (context: TestContext): bstring => {
     context.cleanup((): void => { fmt.Println("indexed-selected-shared-cleanup"); }); return "shared";
   });
-  shared.testEachIndexed<UserID>(rows, (value: UserID, index: int): string => { return fmt.Sprintf("shared %d", index); }, (value: UserID, index: int, resource: string, context: TestContext): void => {
+  shared.testEachIndexed<UserID>(rows, (value: UserID, index: int): bstring => { return fmt.Sprintf("shared %d", index); }, (value: UserID, index: int, resource: bstring, context: TestContext): void => {
     expect(resource).toEqual("shared"); fmt.Printf("indexed-selected-shared-%d\n", index);
   });
   shared.runAndExit();

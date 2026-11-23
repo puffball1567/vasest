@@ -16,13 +16,13 @@ function main(): void {
     expectFunction((): void => {}).toThrowSatisfying((exception: error): boolean => { fmt.Println("unreachable-normal-predicate"); return true; });
   });
   suite.test("nil positive predicate", (): void => {
-    expectFunction((): void => { fmt.Println("unreachable-invalid-predicate-body"); }).toThrowSatisfying(nil);
+    expectFunction((): void => { fmt.Println("unreachable-invalid-predicate-body"); }).toThrowSatisfying(null);
   });
   suite.test("nil negative predicate", (): void => {
-    expectFunction((): void => { fmt.Println("unreachable-invalid-negative-body"); }).not.toThrowSatisfying(nil);
+    expectFunction((): void => { fmt.Println("unreachable-invalid-negative-body"); }).not.toThrowSatisfying(null);
   });
-  suite.test("nil positive body", (): void => { expectFunction(nil).toThrowSatisfying(matches); });
-  suite.test("nil negative body", (): void => { expectFunction(nil).not.toThrowSatisfying(matches); });
+  suite.test("nil positive body", (): void => { expectFunction(null).toThrowSatisfying(matches); });
+  suite.test("nil negative body", (): void => { expectFunction(null).not.toThrowSatisfying(matches); });
   suite.test("raw predicate throw", (): void => {
     expectFunction(body).toThrowSatisfying((exception: error): boolean => { throw errors.New("predicate failed"); });
   });

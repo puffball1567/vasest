@@ -5,8 +5,8 @@ import go os from "os";
 
 class Node {
   public value:int;
-  public next:Node;
-  constructor(value:int){this.value=value;this.next=nil;}
+  public next:Node | null;
+  constructor(value:int){this.value=value;this.next=null;}
 }
 
 function main():void {
@@ -26,8 +26,8 @@ function main():void {
   suite.test("predicate mismatch",():void=>{expectSlice<int>(values).toHaveElementSatisfying(0,(value:int):boolean=>{return value<0;});});
   suite.test("negated predicate match",():void=>{expectSlice<int>(values).not.toHaveElementSatisfying(0,(value:int):boolean=>{return value>0;});});
   suite.test("missing predicate element",():void=>{expectSlice<int>(values).toHaveElementSatisfying(1,(value:int):boolean=>{throw errors.New("missing element callback ran");});});
-  suite.test("nil predicate",():void=>{expectSlice<int>(values).toHaveElementSatisfying(0,nil);});
-  suite.test("negated nil predicate",():void=>{expectSlice<int>(values).not.toHaveElementSatisfying(1,nil);});
+  suite.test("nil predicate",():void=>{expectSlice<int>(values).toHaveElementSatisfying(0,null);});
+  suite.test("negated nil predicate",():void=>{expectSlice<int>(values).not.toHaveElementSatisfying(1,null);});
   suite.test("thrown predicate",():void=>{expectSlice<int>(values).toHaveElementSatisfying(0,(value:int):boolean=>{throw errors.New("selected element callback failed");});});
   suite.test("explicit callback location",():void=>{
     expectSlice<int>(values).not.toHaveElementSatisfying(0,(value:int):boolean=>{

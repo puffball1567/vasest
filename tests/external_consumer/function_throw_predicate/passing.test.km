@@ -1,3 +1,4 @@
+import go os from "os";
 import { Suite, TestContext, FunctionExpectation, NegatedFunctionExpectation, expectFunction, expect, skipTest } from "vasest";
 import go errors from "errors";
 import go fmt from "fmt";
@@ -8,7 +9,7 @@ class DomainError implements error {
   public code: ErrorCode;
   public reads: int;
   constructor(code: ErrorCode) { this.code = code; this.reads = 0; }
-  public function Error(): string { this.reads++; throw errors.New("Error must not be called by matcher"); }
+  public function Error(): bstring { this.reads++; throw errors.New("Error must not be called by matcher"); }
 }
 
 function main(): void {
@@ -52,7 +53,7 @@ function main(): void {
   suite.test("nil and typed nil thrown payloads", (): void => {
     const missing: error = nil;
     expectFunction((): void => { throw missing; }).toThrowSatisfying((exception: error): boolean => { return exception == nil; });
-    const typedNil: DomainError = nil;
+    const typedNil: *os.PathError = nil;
     const expectedNil: error = typedNil;
     expectFunction((): void => { throw typedNil; }).toThrowSatisfying((exception: error): boolean => { return exception != nil && exception == expectedNil; });
   });

@@ -6,7 +6,7 @@ function main(): void {
   const rows: int[] = [42];
   suite.afterEach((): void => { fmt.Println("indexed-body-panic-afterEach"); });
   suite.afterAll((): void => { fmt.Println("indexed-body-panic-afterAll"); });
-  suite.testEachIndexedWithFixture<int, int>(rows, (value: int, index: int): string => { return fmt.Sprint(index); },
+  suite.testEachIndexedWithFixture<int, int>(rows, (value: int, index: int): bstring => { return fmt.Sprint(index); },
     (value: int, index: int, context: TestContext): int => {
       context.cleanup((): void => { fmt.Println("indexed-body-panic-cleanup"); });
       return index;

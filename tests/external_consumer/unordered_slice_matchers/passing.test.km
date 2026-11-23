@@ -9,6 +9,8 @@ class Record {
   constructor(value: int) { this.value = value; }
 }
 
+alias OptionalRecord = Record | null;
+
 function main(): void {
   const suite = new Suite("typed unordered slice matchers");
   suite.test("explicit types duplicates and constructors", (): void => {
@@ -42,11 +44,11 @@ function main(): void {
     expectSlice<int[]>(ordered).not.toEqualUnordered(differentlyOrdered);
     const left = new Record(42);
     const right = new Record(42);
-    const objects: Record[] = [nil, left, left];
-    const equalObjects: Record[] = [right, right, nil];
-    expectSlice<Record>(objects).toEqualUnordered(equalObjects);
+    const objects: OptionalRecord[] = [null, left, left];
+    const equalObjects: OptionalRecord[] = [right, right, null];
+    expectSlice<OptionalRecord>(objects).toEqualUnordered(equalObjects);
     right.value = 43;
-    expectSlice<Record>(objects).not.toEqualUnordered(equalObjects);
+    expectSlice<OptionalRecord>(objects).not.toEqualUnordered(equalObjects);
     const first: Map<string, int> = makeMap[string, int]();
     const second: Map<string, int> = makeMap[string, int]();
     first["answer"] = 42;

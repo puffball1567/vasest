@@ -157,7 +157,7 @@ func TestMockReturnPredicateMatchersValidateBeforeReadingAndSkipMissingCalls(t *
 		t.Fatal("missing call evaluated predicate", reads, calls)
 	}
 	for _, source := range []MockReturnSource[int]{nil, (*MockFn[int, int])(nil)} {
-		matcher := expectMockReturn[int](source)
+		matcher := NewMockReturnExpectation[int](source)
 		for _, check := range []func(){func() { matcher.ToHaveReturnedSatisfying(predicate) }, func() { matcher.Not.ToHaveReturnedSatisfying(predicate) },
 			func() { matcher.ToHaveNthReturnedSatisfying(1, predicate) }, func() { matcher.Not.ToHaveNthReturnedSatisfying(1, predicate) },
 			func() { matcher.ToHaveLastReturnedSatisfying(predicate) }, func() { matcher.Not.ToHaveLastReturnedSatisfying(predicate) },

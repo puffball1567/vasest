@@ -10,11 +10,11 @@ class CodedError implements error {
     this.code = code;
   }
 
-  public function Error(): string {
+  public function Error(): bstring {
     return fmt.Sprintf("code %d", this.code);
   }
 
-  public function String(): string {
+  public function String(): bstring {
     return this.Error();
   }
 }
@@ -30,25 +30,25 @@ function main(): void {
     matcher.not.toBeNil();
     matcher.not.toMatchType<*os.PathError>();
     let found: error = nil;
-    matcher.toMatchType<error>(&found);
+    matcher.toMatchType<error>(&found, (source, target) => errors.As(source, target));
     expect<error>(found).toBe(wrapped);
   });
   suite.test("native pointer extraction with explicit types", (): void => {
     const original = os.PathError { Op: "open", Path: "missing", Err: os.ErrNotExist };
     const matcher = new ErrorExpectation(fmt.Errorf("load: %w", &original));
     let found: *os.PathError = nil;
-    matcher.toMatchType<*os.PathError>(&found);
+    matcher.toMatchType<*os.PathError>(&found, (source, target) => errors.As(source, target));
     expect(found.Path).toEqual("missing");
     matcher.toMatchCause(os.ErrNotExist);
   });
   suite.test("application errors and interfaces", (): void => {
     const original = new CodedError(42);
     const wrapped = fmt.Errorf("load: %w", original);
-    let found: CodedError = nil;
-    expectErrorValue(wrapped).toMatchType<CodedError>(&found);
-    expect(found).toBe(original);
+    let found: CodedError | null = null;
+    expectErrorValue(wrapped).toMatchType<CodedError | null>(&found, (source, target) => errors.As(source, target));
+    expect<CodedError | null>(found).toBe(original);
     let text: fmt.Stringer = nil;
-    expectErrorValue(wrapped).toMatchType<fmt.Stringer>(&text);
+    expectErrorValue(wrapped).toMatchType<fmt.Stringer>(&text, (source, target) => errors.As(source, target));
     expect(text.String()).toEqual("code 42");
     expectErrorValue(wrapped).not.toMatchType<*os.PathError>();
   });
@@ -60,14 +60,14 @@ function main(): void {
     const matcher = expectErrorValue(empty);
     matcher.not.toBeNil();
     let found: *os.PathError = nil;
-    matcher.toMatchType<*os.PathError>(&found);
+    matcher.toMatchType<*os.PathError>(&found, (source, target) => errors.As(source, target));
     expect(found).toBeNil();
   });
   suite.test("destination type can also be inferred", (): void => {
     const original = new CodedError(27);
-    let found: CodedError = nil;
-    expectErrorValue(original).toMatchType(&found);
-    expect(found.code).toEqual(27);
+    let found: CodedError | null = null;
+    expectErrorValue(original).toMatchType(&found, (source, target) => errors.As(source, target));
+    expect(found!.code).toEqual(27);
   });
   suite.runAndExit();
 }

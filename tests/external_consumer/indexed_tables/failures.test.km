@@ -8,16 +8,16 @@ function main(): void {
   const suite = new Suite("indexed failures");
   const rows: UserID[] = [UserID(42), UserID(42), UserID(42)];
   suite.afterEach((): void => { fmt.Println("indexed-afterEach"); });
-  suite.testEachIndexed<UserID>(rows, (value: UserID, index: int): string => { return fmt.Sprintf("plain %d", index); }, (value: UserID, index: int): void => {
+  suite.testEachIndexed<UserID>(rows, (value: UserID, index: int): bstring => { return fmt.Sprintf("plain %d", index); }, (value: UserID, index: int): void => {
     if (index == 1) { expect(value).toEqual(UserID(0)); }
   });
-  suite.testEachIndexedWithContext<UserID>(rows, (value: UserID, index: int): string => { return fmt.Sprintf("context %d", index); }, (value: UserID, index: int, context: TestContext): void => {
+  suite.testEachIndexedWithContext<UserID>(rows, (value: UserID, index: int): bstring => { return fmt.Sprintf("context %d", index); }, (value: UserID, index: int, context: TestContext): void => {
     context.cleanup((): void => { fmt.Printf("indexed-context-cleanup-%d\n", index); });
     if (index == 0) { withTestLocation("domain-check.km", 42, (): void => { throw errors.New("indexed body failed"); }); }
     if (index == 1) { skipTest("indexed row unavailable"); }
     if (index == 2) { throw errors.New("indexed raw body failed"); }
   });
-  suite.testEachIndexedWithFixture<UserID, int>(rows, (value: UserID, index: int): string => { return fmt.Sprintf("fixture %d", index); },
+  suite.testEachIndexedWithFixture<UserID, int>(rows, (value: UserID, index: int): bstring => { return fmt.Sprintf("fixture %d", index); },
     (value: UserID, index: int, context: TestContext): int => {
       fmt.Printf("indexed-setup-%d\n", index);
       context.cleanup((): void => {

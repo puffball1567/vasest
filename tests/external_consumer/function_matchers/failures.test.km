@@ -29,23 +29,23 @@ function main(): void {
   });
   suite.test("wrong type", (): void => {
     let found: *os.PathError = nil;
-    expectFunction((): void => { throw errors.New("actual"); }).toThrowType<*os.PathError>(&found);
+    expectFunction((): void => { throw errors.New("actual"); }).toThrowType<*os.PathError>(&found, (source, target) => errors.As(source, target));
   });
   suite.test("negated type", (): void => {
     expectFunction((): void => { throw errors.New("actual"); }).not.toThrowType<error>();
   });
   suite.test("invalid target", (): void => {
     let wrong = 0;
-    expectFunction(forbidden).toThrowType<int>(&wrong);
+    expectFunction(forbidden).toThrowType<int>(&wrong, (source, target) => false);
   });
   suite.test("nil target", (): void => {
     let missing: *error = nil;
-    expectFunction(forbidden).toThrowType<error>(missing);
+    expectFunction(forbidden).toThrowType<error>(missing, (source, target) => errors.As(source, target));
   });
   suite.test("invalid negated type", (): void => { expectFunction(forbidden).not.toThrowType<int>(); });
   suite.test("invalid message", (): void => { expectFunction(forbidden).toThrowMessage(""); });
   suite.test("invalid negated message", (): void => { expectFunction(forbidden).not.toThrowMessage(""); });
-  suite.test("nil callback", (): void => { expectFunction(nil).not.toThrow(); });
+  suite.test("nil callback", (): void => { expectFunction(null).not.toThrow(); });
   suite.test("later case", (): void => { fmt.Println("function-matcher-later-case"); });
   suite.runAndExit();
 }
