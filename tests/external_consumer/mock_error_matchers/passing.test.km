@@ -6,8 +6,8 @@ import go os from "os";
 class CodedError implements error {
   public code: int;
   constructor(code: int) { this.code = code; }
-  public function Error(): string { return fmt.Sprintf("code %d", this.code); }
-  public function String(): string { return this.Error(); }
+  public function Error(): bstring { return fmt.Sprintf("code %d", this.code); }
+  public function String(): bstring { return this.Error(); }
 }
 
 class Spy implements MockOutcomeSource {
@@ -38,7 +38,7 @@ function main(): void {
     matcher.not.toHaveNthThrownCause(1, errors.New("same message"));
     matcher.not.toHaveLastThrownCause(nil);
     let found: error = nil;
-    matcher.toHaveNthThrownType<error>(1, &found);
+    matcher.toHaveNthThrownType<error>(1, &found, (source, target) => errors.As(source, target));
     expect(found).toBe(wrapped);
     matcher.not.toHaveNthThrownType<*os.PathError>(1);
     action.invoke(2);
@@ -58,7 +58,7 @@ function main(): void {
     mock.implementOnce((value: int): error => { throw fmt.Errorf("load: %w", &original); });
     expectFunction((): void => { mock.invoke(2); }).toThrow();
     let found: *os.PathError = nil;
-    new MockOutcomeExpectation(mock).toHaveLastThrownType<*os.PathError>(&found);
+    new MockOutcomeExpectation(mock).toHaveLastThrownType<*os.PathError>(&found, (source, target) => errors.As(source, target));
     expect(found.Path).toEqual("金木犀");
     expectMockOutcome(mock).toHaveNthThrownCause(2, os.ErrNotExist);
     expectMockOutcome(mock).not.toHaveNthThrownType<*os.PathError>(1);
@@ -67,12 +67,12 @@ function main(): void {
     const original = new CodedError(42);
     const action = new MockAction<int>((value: int): void => { throw fmt.Errorf("load: %w", original); });
     expectFunction((): void => { action.invoke(1); }).toThrow();
-    let found: CodedError = nil;
-    expectMockOutcome(action).toHaveNthThrownType(1, &found);
-    expect(found).toBe(original);
-    expectMockOutcome(action).toHaveLastThrownType<CodedError>(&found);
+    let found: CodedError | null = null;
+    expectMockOutcome(action).toHaveNthThrownType(1, &found, (source, target) => errors.As(source, target));
+    expect<CodedError | null>(found).toBe(original);
+    expectMockOutcome(action).toHaveLastThrownType<CodedError | null>(&found, (source, target) => errors.As(source, target));
     let text: fmt.Stringer = nil;
-    expectMockOutcome(action).toHaveLastThrownType<fmt.Stringer>(&text);
+    expectMockOutcome(action).toHaveLastThrownType<fmt.Stringer>(&text, (source, target) => errors.As(source, target));
     expect(text.String()).toEqual("code 42");
     expectMockOutcome(action).not.toHaveLastThrownType<*os.PathError>();
   });
@@ -88,7 +88,7 @@ function main(): void {
     const action = new MockAction<int>((value: int): void => { const missing: *os.PathError = nil; throw missing; });
     expectFunction((): void => { action.invoke(1); }).toThrow();
     let found: *os.PathError = nil;
-    expectMockOutcome(action).toHaveLastThrownType<*os.PathError>(&found);
+    expectMockOutcome(action).toHaveLastThrownType<*os.PathError>(&found, (source, target) => errors.As(source, target));
     expect(found).toBeNil();
     expectMockOutcome(action).not.toHaveLastThrownCause(nil);
   });
@@ -99,7 +99,7 @@ function main(): void {
     expectMockOutcome(source).toHaveLastThrownCause(cause);
     expect(spy.reads).toEqual(1);
     let found: error = nil;
-    new MockOutcomeExpectation(source).toHaveLastThrownType<error>(&found);
+    new MockOutcomeExpectation(source).toHaveLastThrownType<error>(&found, (source, target) => errors.As(source, target));
     expect(spy.reads).toEqual(2);
     expectMockOutcome(source).not.toHaveNthThrownType<error>(2);
     expect(spy.reads).toEqual(3);

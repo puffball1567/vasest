@@ -2,5 +2,5 @@ import { expectFunction, FunctionExpectation, NegatedFunctionExpectation } from 
 import go os from "os";
 function main(): void {
   const matcher = expectFunction((): void => {});
-  matcher.toThrowTypeSatisfying<error>((exception: *os.PathError): boolean => { return true; });
+  matcher.toThrowTypeSatisfying<error>((exception: *os.PathError): boolean => { return true; }, (source, predicate) => false);
 }

@@ -30,13 +30,13 @@ func TestMockErrorMatchersPreserveChainsTypesAndLiveHistory(t *testing.T) {
 	matcher.Not.ToHaveNthThrownCause(1, errors.New("same message"))
 	matcher.Not.ToHaveLastThrownCause(nil)
 	var found *os.PathError
-	MockOutcomeExpectationToHaveNthThrownType(matcher, 1, &found)
+	MockOutcomeExpectationToHaveNthThrownType(matcher, 1, &found, testErrorMatchInto)
 	if found != path {
 		t.Fatal("extracted error identity changed")
 	}
-	MockOutcomeExpectationToHaveLastThrownType[*os.PathError](matcher, &found)
+	MockOutcomeExpectationToHaveLastThrownType[*os.PathError](matcher, &found, testErrorMatchInto[*os.PathError])
 	var whole error
-	MockOutcomeExpectationToHaveLastThrownType[error](matcher, &whole)
+	MockOutcomeExpectationToHaveLastThrownType[error](matcher, &whole, testErrorMatchInto[error])
 	if whole != wrapped {
 		t.Fatal("error interface extraction changed")
 	}
@@ -47,7 +47,7 @@ func TestMockErrorMatchersPreserveChainsTypesAndLiveHistory(t *testing.T) {
 	matcher.Not.ToHaveLastThrownCause(cause)
 	NegatedMockOutcomeExpectationToHaveLastThrownType[*os.PathError](matcher.Not)
 	assertThrownMessage(t, `status "return"`, func() { matcher.ToHaveLastThrownCause(cause) })
-	assertThrownMessage(t, `status "return"`, func() { MockOutcomeExpectationToHaveLastThrownType(matcher, &found) })
+	assertThrownMessage(t, `status "return"`, func() { MockOutcomeExpectationToHaveLastThrownType(matcher, &found, testErrorMatchInto) })
 	if found != path || invoked != 1 {
 		t.Fatal("nonthrow changed destination or queued behavior")
 	}
@@ -62,7 +62,7 @@ func TestMockErrorMatchersPreserveChainsTypesAndLiveHistory(t *testing.T) {
 	mock.ImplementOnce(func(int) error { panic(__kinmokuseiThrown{err: wrapped}) })
 	assertThrownMessage(t, "load", func() { mock.Invoke(2) })
 	expectMockOutcome(mock).ToHaveNthThrownCause(2, cause)
-	MockOutcomeExpectationToHaveLastThrownType(expectMockOutcome(mock), &found)
+	MockOutcomeExpectationToHaveLastThrownType(expectMockOutcome(mock), &found, testErrorMatchInto)
 	if found != path {
 		t.Fatal(found)
 	}
@@ -75,7 +75,7 @@ func TestMockErrorMatchersRetainCustomMatchingAndNilPayloads(t *testing.T) {
 	results = []MockOutcomeResult{{Status: "throw", Exception: assertionMappedError{code}}}
 	matcher.ToHaveLastThrownCause(&assertionCodeError{Code: 42})
 	var found *assertionCodeError
-	MockOutcomeExpectationToHaveNthThrownType(matcher, 1, &found)
+	MockOutcomeExpectationToHaveNthThrownType(matcher, 1, &found, testErrorMatchInto)
 	if found != code {
 		t.Fatal(found)
 	}
@@ -85,12 +85,12 @@ func TestMockErrorMatchersRetainCustomMatchingAndNilPayloads(t *testing.T) {
 	}
 	results[0].Exception = fmt.Errorf("wrapped: %w", code)
 	var text fmt.Stringer
-	MockOutcomeExpectationToHaveLastThrownType(matcher, &text)
+	MockOutcomeExpectationToHaveLastThrownType(matcher, &text, testErrorMatchInto)
 	if text != code {
 		t.Fatal(text)
 	}
 	results[0].Exception = assertionMutatingAsError{}
-	assertThrownMessage(t, "(errors.As)", func() { MockOutcomeExpectationToHaveLastThrownType(matcher, &found) })
+	assertThrownMessage(t, "(errors.As)", func() { MockOutcomeExpectationToHaveLastThrownType(matcher, &found, testErrorMatchInto) })
 	if found == nil || found.Code != 37 {
 		t.Fatal("custom As destination mutation lost", found)
 	}
@@ -100,7 +100,7 @@ func TestMockErrorMatchersRetainCustomMatchingAndNilPayloads(t *testing.T) {
 		t.Fatal("negative changed caller destination")
 	}
 	results[0].Exception = errors.New("unrelated")
-	assertThrownMessage(t, "(errors.As)", func() { MockOutcomeExpectationToHaveNthThrownType(matcher, 1, &found) })
+	assertThrownMessage(t, "(errors.As)", func() { MockOutcomeExpectationToHaveNthThrownType(matcher, 1, &found, testErrorMatchInto) })
 	if found.Code != 37 {
 		t.Fatal("ordinary mismatch overwrote target")
 	}
@@ -109,11 +109,11 @@ func TestMockErrorMatchersRetainCustomMatchingAndNilPayloads(t *testing.T) {
 	matcher.ToHaveLastThrownCause(nil)
 	matcher.Not.ToHaveLastThrownCause(code)
 	NegatedMockOutcomeExpectationToHaveLastThrownType[error](matcher.Not)
-	assertThrownMessage(t, "(errors.As)", func() { MockOutcomeExpectationToHaveLastThrownType(matcher, &found) })
+	assertThrownMessage(t, "(errors.As)", func() { MockOutcomeExpectationToHaveLastThrownType(matcher, &found, testErrorMatchInto) })
 	var empty *os.PathError
 	results[0].Exception = empty
 	var extracted *os.PathError = &os.PathError{Path: "unchanged"}
-	MockOutcomeExpectationToHaveLastThrownType(matcher, &extracted)
+	MockOutcomeExpectationToHaveLastThrownType(matcher, &extracted, testErrorMatchInto)
 	if extracted != nil {
 		t.Fatal("typed nil lost")
 	}
@@ -135,7 +135,7 @@ func TestMockErrorMatchersValidateBeforeOneSnapshot(t *testing.T) {
 	var target error
 	checks := []func(){
 		func() { matcher.ToHaveNthThrownCause(1, cause) }, func() { matcher.ToHaveLastThrownCause(cause) },
-		func() { MockOutcomeExpectationToHaveNthThrownType(matcher, 1, &target) }, func() { MockOutcomeExpectationToHaveLastThrownType(matcher, &target) },
+		func() { MockOutcomeExpectationToHaveNthThrownType(matcher, 1, &target, testErrorMatchInto) }, func() { MockOutcomeExpectationToHaveLastThrownType(matcher, &target, testErrorMatchInto) },
 		func() { matcher.Not.ToHaveNthThrownCause(2, cause) }, func() { matcher.Not.ToHaveLastThrownCause(nil) },
 		func() { NegatedMockOutcomeExpectationToHaveNthThrownType[*os.PathError](matcher.Not, 1) }, func() { NegatedMockOutcomeExpectationToHaveLastThrownType[*os.PathError](matcher.Not) },
 	}
@@ -150,9 +150,9 @@ func TestMockErrorMatchersValidateBeforeOneSnapshot(t *testing.T) {
 	var invalid int
 	for i, check := range []func(){
 		func() { matcher.ToHaveNthThrownCause(0, cause) }, func() { matcher.Not.ToHaveNthThrownCause(-1, cause) },
-		func() { MockOutcomeExpectationToHaveNthThrownType(matcher, 0, &target) }, func() { NegatedMockOutcomeExpectationToHaveNthThrownType[error](matcher.Not, 0) },
-		func() { MockOutcomeExpectationToHaveNthThrownType[error](matcher, 1, nil) }, func() { MockOutcomeExpectationToHaveLastThrownType[error](matcher, nil) },
-		func() { MockOutcomeExpectationToHaveNthThrownType(matcher, 1, &invalid) }, func() { MockOutcomeExpectationToHaveLastThrownType(matcher, &invalid) },
+		func() { MockOutcomeExpectationToHaveNthThrownType(matcher, 0, &target, testErrorMatchInto) }, func() { NegatedMockOutcomeExpectationToHaveNthThrownType[error](matcher.Not, 0) },
+		func() { MockOutcomeExpectationToHaveNthThrownType[error](matcher, 1, nil, testErrorMatchInto[error]) }, func() { MockOutcomeExpectationToHaveLastThrownType[error](matcher, nil, testErrorMatchInto[error]) },
+		func() { MockOutcomeExpectationToHaveNthThrownType(matcher, 1, &invalid, testErrorMatchInto) }, func() { MockOutcomeExpectationToHaveLastThrownType(matcher, &invalid, testErrorMatchInto) },
 		func() { NegatedMockOutcomeExpectationToHaveNthThrownType[int](matcher.Not, 1) }, func() { NegatedMockOutcomeExpectationToHaveLastThrownType[int](matcher.Not) },
 	} {
 		fragment := "must"
@@ -169,7 +169,7 @@ func TestMockErrorMatchersValidateBeforeOneSnapshot(t *testing.T) {
 		for _, check := range []func(){
 			func() { missing.ToHaveNthThrownCause(1, cause) }, func() { missing.ToHaveLastThrownCause(cause) },
 			func() { missing.Not.ToHaveNthThrownCause(1, cause) }, func() { missing.Not.ToHaveLastThrownCause(cause) },
-			func() { MockOutcomeExpectationToHaveNthThrownType(missing, 1, &target) }, func() { MockOutcomeExpectationToHaveLastThrownType(missing, &target) },
+			func() { MockOutcomeExpectationToHaveNthThrownType(missing, 1, &target, testErrorMatchInto) }, func() { MockOutcomeExpectationToHaveLastThrownType(missing, &target, testErrorMatchInto) },
 			func() { NegatedMockOutcomeExpectationToHaveNthThrownType[error](missing.Not, 1) }, func() { NegatedMockOutcomeExpectationToHaveLastThrownType[error](missing.Not) },
 		} {
 			assertThrownMessage(t, "outcome source must not be nil", check)
@@ -205,7 +205,7 @@ func TestMockErrorMatchersPreserveCallbackFailuresAndNativeCleanup(t *testing.T)
 					if negated {
 						NegatedMockOutcomeExpectationToHaveLastThrownType[*assertionCodeError](matcher.Not)
 					} else {
-						MockOutcomeExpectationToHaveNthThrownType(matcher, 1, &target)
+						MockOutcomeExpectationToHaveNthThrownType(matcher, 1, &target, testErrorMatchInto)
 					}
 				} else if negated {
 					matcher.Not.ToHaveNthThrownCause(1, sentinel)
@@ -273,19 +273,31 @@ func TestMockErrorMatchersIdentifyEveryCaller(t *testing.T) {
 	var invalid int
 	nilMatcher := expectMockOutcome((*MockAction[int])(nil))
 	var want TestLocation
-	record := func() {
+	record := func(nextLine ...bool) {
 		_, file, line, _ := runtime.Caller(1)
+		if len(nextLine) != 0 {
+			line++
+		}
 		want = TestLocation{File: file, Line: line, Source: "go"}
 	}
 	checks := []func(){
 		func() { record(); matcher.ToHaveNthThrownCause(1, errors.New("cause")) }, func() { record(); matcher.ToHaveLastThrownCause(nil) },
 		func() { record(); matcher.Not.ToHaveNthThrownCause(1, cause) }, func() { record(); matcher.Not.ToHaveLastThrownCause(cause) },
-		func() { record(); MockOutcomeExpectationToHaveNthThrownType(matcher, 1, &wrong) }, func() { record(); MockOutcomeExpectationToHaveLastThrownType(matcher, &wrong) },
+		func() { record(); MockOutcomeExpectationToHaveNthThrownType(matcher, 1, &wrong, testErrorMatchInto) }, func() { record(); MockOutcomeExpectationToHaveLastThrownType(matcher, &wrong, testErrorMatchInto) },
 		func() { record(); NegatedMockOutcomeExpectationToHaveNthThrownType[error](matcher.Not, 1) }, func() { record(); NegatedMockOutcomeExpectationToHaveLastThrownType[error](matcher.Not) },
 		func() { record(); matcher.ToHaveNthThrownCause(0, cause) }, func() { record(); matcher.Not.ToHaveNthThrownCause(0, cause) },
-		func() { record(); MockOutcomeExpectationToHaveNthThrownType(matcher, 0, &destination) }, func() { record(); NegatedMockOutcomeExpectationToHaveNthThrownType[error](matcher.Not, 0) },
-		func() { record(); MockOutcomeExpectationToHaveNthThrownType[error](matcher, 1, nil) }, func() { record(); MockOutcomeExpectationToHaveLastThrownType[error](matcher, nil) },
-		func() { record(); MockOutcomeExpectationToHaveNthThrownType(matcher, 1, &invalid) }, func() { record(); MockOutcomeExpectationToHaveLastThrownType(matcher, &invalid) },
+		func() {
+			record(true)
+			MockOutcomeExpectationToHaveNthThrownType(matcher, 0, &destination, testErrorMatchInto)
+		}, func() { record(); NegatedMockOutcomeExpectationToHaveNthThrownType[error](matcher.Not, 0) },
+		func() {
+			record(true)
+			MockOutcomeExpectationToHaveNthThrownType[error](matcher, 1, nil, testErrorMatchInto[error])
+		}, func() {
+			record(true)
+			MockOutcomeExpectationToHaveLastThrownType[error](matcher, nil, testErrorMatchInto[error])
+		},
+		func() { record(); MockOutcomeExpectationToHaveNthThrownType(matcher, 1, &invalid, testErrorMatchInto) }, func() { record(); MockOutcomeExpectationToHaveLastThrownType(matcher, &invalid, testErrorMatchInto) },
 		func() { record(); NegatedMockOutcomeExpectationToHaveNthThrownType[int](matcher.Not, 1) }, func() { record(); NegatedMockOutcomeExpectationToHaveLastThrownType[int](matcher.Not) },
 		func() { record(); expectMockOutcome(nil).ToHaveLastThrownCause(nil) }, func() { record(); NegatedMockOutcomeExpectationToHaveLastThrownType[error](nilMatcher.Not) },
 	}
@@ -321,7 +333,7 @@ func TestMockErrorMatchersTrackPendingCallsInInvocationOrder(t *testing.T) {
 	assertThrownMessage(t, `status "incomplete"`, func() { matcher.ToHaveLastThrownCause(cause) })
 	assertThrownMessage(t, "second", func() { action.Invoke(2) })
 	var found error
-	MockOutcomeExpectationToHaveLastThrownType(matcher, &found)
+	MockOutcomeExpectationToHaveLastThrownType(matcher, &found, testErrorMatchInto)
 	if found != cause {
 		t.Fatal(found)
 	}
@@ -330,7 +342,7 @@ func TestMockErrorMatchersTrackPendingCallsInInvocationOrder(t *testing.T) {
 	<-done
 	// Finishing call 1 after call 2 must not replace the last invocation.
 	matcher.ToHaveLastThrownCause(cause)
-	MockOutcomeExpectationToHaveLastThrownType(matcher, &found)
+	MockOutcomeExpectationToHaveLastThrownType(matcher, &found, testErrorMatchInto)
 	matcher.Not.ToHaveNthThrownCause(1, cause)
 	NegatedMockOutcomeExpectationToHaveNthThrownType[error](matcher.Not, 1)
 	action.ImplementOnce(func(int) { panic("native panic") })
@@ -344,7 +356,7 @@ func TestMockErrorMatchersTrackPendingCallsInInvocationOrder(t *testing.T) {
 	}()
 	matcher.Not.ToHaveLastThrownCause(nil)
 	NegatedMockOutcomeExpectationToHaveLastThrownType[error](matcher.Not)
-	assertThrownMessage(t, `status "panic"`, func() { MockOutcomeExpectationToHaveLastThrownType(matcher, &found) })
+	assertThrownMessage(t, `status "panic"`, func() { MockOutcomeExpectationToHaveLastThrownType(matcher, &found, testErrorMatchInto) })
 }
 
 func TestMockErrorMatchersConcurrentInvokeAndClear(t *testing.T) {

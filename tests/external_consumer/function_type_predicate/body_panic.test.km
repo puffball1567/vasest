@@ -1,6 +1,12 @@
+import go errors from "errors";
 import { Suite, TestContext, expectFunction } from "vasest";
 import go fmt from "fmt";
 import go reflect from "reflect";
+
+function extractAnyError(source: error, predicate: (value: error) => boolean): boolean {
+  let value: error = nil;
+  return errors.As(source, &value) && predicate(value);
+}
 
 function main(): void {
   const suite = new Suite("function predicate body panic");
@@ -8,7 +14,7 @@ function main(): void {
   suite.afterAll((): void => { fmt.Println("function-type-body-panic-afterAll"); });
   suite.testWithContext("native body panic", (context: TestContext): void => {
     context.cleanup((): void => { fmt.Println("function-type-body-panic-cleanup"); });
-    expectFunction((): void => { reflect.ValueOf(42).Index(0); }).toThrowTypeSatisfying<error>((exception: error): boolean => { fmt.Println("unreachable-body-panic-predicate"); return true; });
+    expectFunction((): void => { reflect.ValueOf(42).Index(0); }).toThrowTypeSatisfying<error>((exception: error): boolean => { fmt.Println("unreachable-body-panic-predicate"); return true; }, extractAnyError);
   });
   suite.test("later", (): void => { fmt.Println("unreachable-body-panic-later"); });
   suite.runAndExit();

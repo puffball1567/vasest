@@ -52,8 +52,8 @@ function main(): void {
     expectEqual(received, ["second"]);
     send.expectCalledTimes(2);
     send.expectNthCalledWith(1, "first");
-    expectThrowsMessage((): void => { send.implement(nil); }, "mock implementation must not be nil");
-    expectThrowsMessage((): void => { send.implementOnce(nil); }, "mock implementation must not be nil");
+    expectThrowsMessage((): void => { send.implement(null); }, "mock implementation must not be nil");
+    expectThrowsMessage((): void => { send.implementOnce(null); }, "mock implementation must not be nil");
   });
   suite.test("call count mismatch", (): void => {
     const send = new MockAction<int>((value: int): void => {});

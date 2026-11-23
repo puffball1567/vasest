@@ -104,7 +104,7 @@ func TestMapEntriesRetainNativeDeepValueAndFloatEquality(t *testing.T) {
 	cycle["self"] = cycle
 	values := map[string]map[string]any{"loop": cycle}
 	expectMap(values).ToHaveEntries(values)
-	assertThrownMessage(t, "<cyclic value>", func() { expectMap(values).Not.ToHaveEntries(values) })
+	assertThrownMessage(t, "possible cyclic value", func() { expectMap(values).Not.ToHaveEntries(values) })
 	if reflect.ValueOf(cycle["self"]).Pointer() != reflect.ValueOf(cycle).Pointer() {
 		t.Fatal("cycle was altered")
 	}

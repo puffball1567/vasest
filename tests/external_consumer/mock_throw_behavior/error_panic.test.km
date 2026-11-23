@@ -4,7 +4,7 @@ import go reflect from "reflect";
 
 class FormattingError implements error {
   constructor() {}
-  public function Error(): string { reflect.ValueOf(42).Index(0); return "unreachable-error-message"; }
+  public function Error(): bstring { reflect.ValueOf(42).Index(0); return "unreachable-error-message"; }
 }
 
 function main(): void {

@@ -2,16 +2,16 @@ import { FixtureSuite, TestContext } from "vasest";
 import go fmt from "fmt";
 import go reflect from "reflect";
 function main(): void {
-  const suite = new FixtureSuite<string>("indexed shared panic", (context: TestContext): string => {
+  const suite = new FixtureSuite<bstring>("indexed shared panic", (context: TestContext): bstring => {
     context.cleanup((): void => { fmt.Println("indexed-shared-panic-sharedCleanup"); }); return "shared";
   });
   const rows: int[] = [42];
-  suite.afterEach((fixture: string): void => { fmt.Println("indexed-shared-panic-afterEach"); });
-  suite.afterAll((fixture: string): void => { fmt.Println("indexed-shared-panic-afterAll"); });
-  suite.testEachIndexed<int>(rows, (value: int, index: int): string => { return fmt.Sprint(index); }, (value: int, index: int, fixture: string, context: TestContext): void => {
+  suite.afterEach((fixture: bstring): void => { fmt.Println("indexed-shared-panic-afterEach"); });
+  suite.afterAll((fixture: bstring): void => { fmt.Println("indexed-shared-panic-afterAll"); });
+  suite.testEachIndexed<int>(rows, (value: int, index: int): bstring => { return fmt.Sprint(index); }, (value: int, index: int, fixture: bstring, context: TestContext): void => {
     context.cleanup((): void => { fmt.Println("indexed-shared-panic-cleanup"); }); reflect.ValueOf(index).Index(0);
     fmt.Println("unreachable-shared-panic-body");
   });
-  suite.test("later", (fixture: string, context: TestContext): void => { fmt.Println("unreachable-shared-panic-later"); });
+  suite.test("later", (fixture: bstring, context: TestContext): void => { fmt.Println("unreachable-shared-panic-later"); });
   suite.runAndExit();
 }

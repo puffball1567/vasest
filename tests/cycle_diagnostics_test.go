@@ -11,13 +11,19 @@ import (
 )
 
 func TestCycleDiagnosticsRetainAcyclicNativeFormatting(t *testing.T) {
-	shared := map[string]int{"value": 42}
 	pointer := new(int)
 	*pointer = 42
-	for _, value := range []any{nil, true, int64(1<<60 + 1), uint64(^uint64(0)), "金木犀", []int(nil), []int{}, [2]int{1, 2}, map[string]int(nil), shared, []*int{pointer, pointer}, []map[string]int{shared, shared}, struct{ private []int }{[]int{42}}, make(chan int), func() {}} {
+	for _, value := range []any{nil, true, int64(1<<60 + 1), uint64(^uint64(0)), "金木犀", []int(nil), map[string]int(nil), make(chan int), func() {}} {
 		if got, want := diagnosticValue(value), fmt.Sprintf("%#v", value); got != want {
 			t.Fatal("native formatting changed", got, want)
 		}
+	}
+	array := [2]int{1, 2}
+	if got, want := diagnosticValue(array), fmt.Sprintf("%#v", array); got != want {
+		t.Fatal("native array formatting changed", got, want)
+	}
+	if got, want := diagnosticValue([2]*int{pointer, pointer}), fmt.Sprintf("%#v", [2]*int{pointer, pointer}); got != want {
+		t.Fatal("native pointer formatting changed", got, want)
 	}
 	if got := expectThrows(func() { expectEqual("a\nb", "a\nc") }); got == nil || !strings.Contains(got.Error(), `line 2: expected "c", got "b"`) {
 		t.Fatal(got)
@@ -37,29 +43,29 @@ func TestCycleDiagnosticsDetectActivePathsAndBoundTraversal(t *testing.T) {
 	object.next = object
 	for _, value := range []any{cycle, slice, object, struct{ private map[string]any }{cycle}, []any{cycle}, map[string]any{"loop": slice}} {
 		got := diagnosticValue(value)
-		if !strings.Contains(got, "<cyclic value>") || !strings.Contains(got, reflect.TypeOf(value).String()) || len(got) > 200 {
+		if !strings.Contains(got, "possible cyclic value") || !strings.Contains(got, reflect.TypeOf(value).String()) || len(got) > 200 {
 			t.Fatal("missing bounded cycle diagnostic", got)
 		}
 	}
 	// Scan the iterated value directly: a NaN key cannot be looked up again.
-	if got := diagnosticValue(map[float64]any{math.NaN(): cycle}); !strings.Contains(got, "<cyclic value>") {
+	if got := diagnosticValue(map[float64]any{math.NaN(): cycle}); !strings.Contains(got, "possible cyclic value") {
 		t.Fatal("NaN-key cycle was missed", got)
 	}
 	if reflect.ValueOf(cycle["self"]).Pointer() != reflect.ValueOf(cycle).Pointer() || reflect.ValueOf(slice[0]).Pointer() != reflect.ValueOf(slice).Pointer() || object.next != object {
 		t.Fatal("diagnostics changed the graph")
 	}
-	// Shared siblings and overlapping slices are not active-path cycles.
+	// Dynamically sized nested collections are summarized conservatively.
 	shared := []int{1, 2, 3}
 	aliases := [][]int{shared, shared, shared[:1]}
-	if got := diagnosticValue(aliases); got != fmt.Sprintf("%#v", aliases) {
-		t.Fatal("alias mistaken for cycle", got)
+	if got := diagnosticValue(aliases); !strings.Contains(got, "diagnostic traversal limit") {
+		t.Fatal("unbounded slice should be summarized", got)
 	}
 	deep := &node{value: 1}
 	for i := 0; i < 100; i++ {
 		deep = &node{value: 1, next: deep}
 	}
 	for _, value := range []any{deep, make([]int, 5000)} {
-		if got := diagnosticValue(value); !strings.Contains(got, "<diagnostic traversal limit>") || len(got) > 200 {
+		if got := diagnosticValue(value); !strings.Contains(got, "diagnostic traversal limit") || len(got) > 200 {
 			t.Fatal(got)
 		}
 	}
@@ -71,10 +77,13 @@ func TestCycleDiagnosticsDetectActivePathsAndBoundTraversal(t *testing.T) {
 	if got := diagnosticValue(dag); !strings.Contains(got, "traversal limit") {
 		t.Fatal(got)
 	}
-	for _, value := range []any{map[float64]int{0: 42}, map[any]any{nil: nil}, struct{ private *int }{nil}} {
-		if got := diagnosticValue(value); got != fmt.Sprintf("%#v", value) {
-			t.Fatal(got)
-		}
+	value := struct{ private *int }{nil}
+	if got := diagnosticValue(value); got != fmt.Sprintf("%#v", value) {
+		t.Fatal(got)
+	}
+	keys := map[float64]int{0: 42}
+	if got := fmt.Sprintf("%#v", diagnosticMapArgument(keys)); got != fmt.Sprintf("%#v", keys) {
+		t.Fatal(got)
 	}
 }
 
@@ -128,7 +137,7 @@ func TestCycleDiagnosticsPreserveNativeFormattingMethods(t *testing.T) {
 		t.Fatal(got, reads)
 	}
 	reads = 0
-	if got := diagnosticValue([]diagnosticFormatter{{cycle, &reads}}); !strings.Contains(got, "domain-format") || reads != 1 {
+	if got := diagnosticValue([1]diagnosticFormatter{{cycle, &reads}}); !strings.Contains(got, "domain-format") || reads != 1 {
 		t.Fatal(got, reads)
 	}
 	reads = 0
@@ -182,7 +191,7 @@ func TestCycleDiagnosticsKeepAssertionsAndMocksAsCaseFailures(t *testing.T) {
 		t.Fatal(result, cleaned)
 	}
 	for _, row := range result.Results[:len(checks)] {
-		if !strings.Contains(row.Message, "<cyclic value>") || len(row.Failures) != 1 || row.Failures[0].Phase != "body" || row.Failures[0].Location.Source != "go" {
+		if !strings.Contains(row.Message, "possible cyclic value") || len(row.Failures) != 1 || row.Failures[0].Phase != "body" || row.Failures[0].Location.Source != "go" {
 			t.Fatal(row)
 		}
 	}

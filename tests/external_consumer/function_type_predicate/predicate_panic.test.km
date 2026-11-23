@@ -3,13 +3,18 @@ import go fmt from "fmt";
 import go reflect from "reflect";
 import go errors from "errors";
 
+function extractAnyError(source: error, predicate: (value: error) => boolean): boolean {
+  let value: error = nil;
+  return errors.As(source, &value) && predicate(value);
+}
+
 function main(): void {
   const suite = new Suite("function predicate panic");
   suite.afterEach((): void => { fmt.Println("function-type-predicate-panic-afterEach"); });
   suite.afterAll((): void => { fmt.Println("function-type-predicate-panic-afterAll"); });
   suite.testWithContext("native predicate panic", (context: TestContext): void => {
     context.cleanup((): void => { fmt.Println("function-type-predicate-panic-cleanup"); });
-    expectFunction((): void => { throw errors.New("body"); }).not.toThrowTypeSatisfying<error>((exception: error): boolean => { reflect.ValueOf(42).Index(0); return false; });
+    expectFunction((): void => { throw errors.New("body"); }).not.toThrowTypeSatisfying<error>((exception: error): boolean => { reflect.ValueOf(42).Index(0); return false; }, extractAnyError);
   });
   suite.test("later", (): void => { fmt.Println("unreachable-predicate-panic-later"); });
   suite.runAndExit();

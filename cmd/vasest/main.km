@@ -22,24 +22,24 @@ import go utf8 from "unicode/utf8";
 
 struct RunnerConfig {
   public version: int;
-  public testPath: *string;
+  public testPath: *bstring;
   public jobs: *int;
   public repeat: *int;
-  public timeout: *string;
-  public reporter: *string;
-  public filter: *string;
+  public timeout: *bstring;
+  public reporter: *bstring;
+  public filter: *bstring;
   public bail: *boolean;
   public failOnTodo: *boolean;
-  public include: string[];
-  public exclude: string[];
+  public include: bstring[];
+  public exclude: bstring[];
 }
 
 struct RunnerInput {
-  args: string[];
-  controls: string[];
+  args: bstring[];
+  controls: bstring[];
   config: RunnerConfig;
-  configPath: string;
-  path: string;
+  configPath: bstring;
+  path: bstring;
   listOnly: boolean;
 }
 
@@ -47,7 +47,7 @@ function emptyConfig(): RunnerConfig {
   return RunnerConfig { version: 1, testPath: nil, jobs: nil, repeat: nil, timeout: nil, reporter: nil, filter: nil, bail: nil, failOnTodo: nil, include: [], exclude: [] };
 }
 
-function validateFilePattern(pattern: string): Result<string> {
+function validateFilePattern(pattern: bstring): Result<bstring> {
   let normalized = pattern;
   while (strings.HasPrefix(normalized, "./")) {
     normalized = strings.TrimPrefix(normalized, "./");
@@ -73,7 +73,7 @@ function validateFilePattern(pattern: string): Result<string> {
   return ok(normalized);
 }
 
-function matchesFilePattern(pattern: string, relative: string): Result<boolean> {
+function matchesFilePattern(pattern: bstring, relative: bstring): Result<boolean> {
   const names = strings.Split(relative, "/");
   let previous: boolean[] = [true];
   for (const name of names) {
@@ -96,9 +96,9 @@ function matchesFilePattern(pattern: string, relative: string): Result<boolean> 
   return ok(previous[len(names)]);
 }
 
-function selectTestFiles(path: string, files: string[], includes: string[], excludes: string[]): Result<string[]> {
-  let included: string[] = [];
-  let excluded: string[] = [];
+function selectTestFiles(path: bstring, files: bstring[], includes: bstring[], excludes: bstring[]): Result<bstring[]> {
+  let included: bstring[] = [];
+  let excluded: bstring[] = [];
   for (const pattern of includes) {
     const normalized = validateFilePattern(pattern)?;
     included = append(included, normalized);
@@ -113,7 +113,7 @@ function selectTestFiles(path: string, files: string[], includes: string[], excl
     base = filepath.Dir(path);
   }
   const root = filepath.Abs(base)?;
-  let selected: string[] = [];
+  let selected: bstring[] = [];
   for (const file of files) {
     const absolute = filepath.Abs(file)?;
     const relative = filepath.Rel(root, absolute)?;
@@ -145,7 +145,7 @@ function selectTestFiles(path: string, files: string[], includes: string[], excl
 
 // JSON syntax remains the decoder's responsibility. Check escapes before it can
 // replace an unpaired UTF-16 surrogate with a different, valid identifier.
-function hasUnpairedJSONSurrogate(text: string): boolean {
+function hasUnpairedJSONSurrogate(text: bstring): boolean {
   let inString = false;
   for (let index = 0; index < len(text); index++) {
     const character = text[index:index + 1];
@@ -188,13 +188,13 @@ function hasUnpairedJSONSurrogate(text: string): boolean {
 
 struct JSONFieldScope {
   object: boolean;
-  names: string[];
+  names: bstring[];
   key: boolean;
 }
 
 // Token decoding preserves repeated keys and decodes escaped names. Fold names
 // as the native struct decoder does, while keeping separate object scopes.
-function duplicateJSONFieldError(text: string): error {
+function duplicateJSONFieldError(text: bstring): error {
   const decoder = json.NewDecoder(strings.NewReader(text));
   decoder.UseNumber();
   const delimiterType = reflect.TypeOf(json.Delim(0));
@@ -224,7 +224,7 @@ function duplicateJSONFieldError(text: string): error {
     }
     let scope = scopes[len(scopes) - 1];
     if (scope.key) {
-      const name = token as! string;
+      const name = token as! bstring;
       for (const seen of scope.names) {
         if (strings.EqualFold(seen, name)) {
           return fmt.Errorf("duplicate JSON field %q", name);
@@ -238,7 +238,7 @@ function duplicateJSONFieldError(text: string): error {
   return nil;
 }
 
-function readRunnerConfig(path: string): Result<RunnerConfig> {
+function readRunnerConfig(path: bstring): Result<RunnerConfig> {
   const data = os.ReadFile(path)?;
   if (!utf8.Valid(data)) {
     return fail(errors.New("configuration must be valid UTF-8"));
@@ -246,10 +246,10 @@ function readRunnerConfig(path: string): Result<RunnerConfig> {
   if (!json.Valid(data)) {
     return fail(errors.New("invalid configuration JSON"));
   }
-  if (hasUnpairedJSONSurrogate(string(data))) {
+  if (hasUnpairedJSONSurrogate(bstring(data))) {
     return fail(errors.New("configuration must use paired Unicode surrogate escapes"));
   }
-  const fieldError = duplicateJSONFieldError(string(data));
+  const fieldError = duplicateJSONFieldError(bstring(data));
   if (fieldError != nil) {
     return fail(fieldError);
   }
@@ -300,17 +300,17 @@ function readRunnerConfig(path: string): Result<RunnerConfig> {
   return ok(config);
 }
 
-function optionTakesValue(argument: string): boolean {
+function optionTakesValue(argument: bstring): boolean {
   return argument == "--repeat" || argument == "--include" || argument == "--exclude" || argument == "--watch-interval" || argument == "--coverage" || argument == "--artifacts" || argument == "--save-failures" || argument == "--rerun-failed" || argument == "--filter" || argument == "--timeout" || argument == "--shuffle" || argument == "--shard" || argument == "--jobs" || argument == "--reporter";
 }
 
-function prepareRunnerInput(args: string[]): Result<RunnerInput> {
+function prepareRunnerInput(args: bstring[]): Result<RunnerInput> {
   let input = RunnerInput { args: [], controls: [], config: emptyConfig(), configPath: "", path: "tests", listOnly: false };
-  let explicitConfig = "";
+  let explicitConfig: bstring = "";
   let disabled = false;
   let awaitingConfig = false;
   let awaitingValue = false;
-  let commandPath = "";
+  let commandPath: bstring = "";
   let informational = false;
   for (const argument of args) {
     if (awaitingConfig) {
@@ -388,13 +388,13 @@ function prepareRunnerInput(args: string[]): Result<RunnerInput> {
 }
 
 struct FailedSuite {
-  public name: string;
+  public name: bstring;
   public wholeSuite: boolean;
-  public cases: string[];
+  public cases: bstring[];
 }
 
 struct FailedFile {
-  public file: string;
+  public file: bstring;
   public wholeFile: boolean;
   public suites: FailedSuite[];
 }
@@ -409,7 +409,7 @@ struct RerunSelection {
   public suites: FailedSuite[];
 }
 
-function readFailureHistory(path: string): Result<FailureHistory> {
+function readFailureHistory(path: bstring): Result<FailureHistory> {
   const data = os.ReadFile(path)?;
   if (!utf8.Valid(data)) {
     return fail(errors.New("failure history must be valid UTF-8"));
@@ -417,10 +417,10 @@ function readFailureHistory(path: string): Result<FailureHistory> {
   if (!json.Valid(data)) {
     return fail(errors.New("invalid failure history JSON"));
   }
-  if (hasUnpairedJSONSurrogate(string(data))) {
+  if (hasUnpairedJSONSurrogate(bstring(data))) {
     return fail(errors.New("failure history must use paired Unicode surrogate escapes"));
   }
-  const fieldError = duplicateJSONFieldError(string(data));
+  const fieldError = duplicateJSONFieldError(bstring(data));
   if (fieldError != nil) {
     return fail(fieldError);
   }
@@ -435,7 +435,7 @@ function readFailureHistory(path: string): Result<FailureHistory> {
   if (history.version != 1 || history.files == nil) {
     return fail(errors.New("failure history requires version 1 and a files array"));
   }
-  let seenFiles: string[] = [];
+  let seenFiles: bstring[] = [];
   for (const entry of history.files) {
     if (entry.file == "" || filepath.IsAbs(entry.file) || !strings.HasSuffix(entry.file, ".test.km") || strings.ContainsAny(entry.file, "\r\n\x00")) {
       return fail(errors.New("failure history requires relative *.test.km file paths"));
@@ -450,7 +450,7 @@ function readFailureHistory(path: string): Result<FailureHistory> {
     if ((!entry.wholeFile && len(entry.suites) == 0) || (entry.wholeFile && len(entry.suites) != 0)) {
       return fail(errors.New("failure history requires either a whole file or selected suites"));
     }
-    let seenSuites: string[] = [];
+    let seenSuites: bstring[] = [];
     for (const suite of entry.suites) {
       if (strings.TrimSpace(suite.name) == "" || (!suite.wholeSuite && len(suite.cases) == 0) || (suite.wholeSuite && len(suite.cases) != 0)) {
         return fail(errors.New("invalid failure history suite selection"));
@@ -471,26 +471,26 @@ function readFailureHistory(path: string): Result<FailureHistory> {
   return ok(history);
 }
 
-function rerunSelection(history: FailureHistory, historyPath: string, file: string): Result<string> {
+function rerunSelection(history: FailureHistory, historyPath: bstring, file: bstring): Result<bstring> {
   const absolute = filepath.Abs(file)?;
   for (const entry of history.files) {
     const resolved = filepath.Abs(filepath.Join(filepath.Dir(historyPath), entry.file))?;
     if (resolved == absolute) {
       const data = json.Marshal(RerunSelection { all: entry.wholeFile, suites: entry.suites })?;
-      return ok(string(data));
+      return ok(bstring(data));
     }
   }
   return ok("");
 }
 
-function failedFile(file: string, execution: FileExecution): FailedFile {
+function failedFile(file: bstring, execution: FileExecution): FailedFile {
   let entry = FailedFile { file: file, wholeFile: false, suites: [] };
   // Process failures and incomplete reports cannot identify every failed case.
   if ((execution.runError != nil && !execution.expectedExit) || execution.fatalError != nil || (execution.reportFailure != "" && execution.reportFailure != "suite reported failed tests")) {
     entry.wholeFile = true;
     return entry;
   }
-  let suiteCounts: Map<string, int> = makeMap[string, int]();
+  let suiteCounts: Map<bstring, int> = makeMap[bstring, int]();
   for (const reported of execution.suites) {
     const name = reported.report.summary.suite;
     suiteCounts[name] = suiteCounts[name] + 1;
@@ -580,14 +580,14 @@ function mergeFailure(entries: FailedFile[], incoming: FailedFile): FailedFile[]
   return append(entries, incoming);
 }
 
-function repeatFileName(file: string, index: int, count: int): string {
+function repeatFileName(file: bstring, index: int, count: int): bstring {
   if (count == 1) {
     return file;
   }
   return fmt.Sprintf("%s (repeat %d/%d)", file, index, count);
 }
 
-function saveFailureHistory(path: string, entries: FailedFile[]): error {
+function saveFailureHistory(path: bstring, entries: FailedFile[]): error {
   const [absolute, absoluteError] = filepath.Abs(path);
   if (absoluteError != nil) {
     return absoluteError;
@@ -632,28 +632,28 @@ function saveFailureHistory(path: string, entries: FailedFile[]): error {
 }
 
 struct LocationReport {
-  public file: string;
+  public file: bstring;
   public line: int;
-  public source: string;
+  public source: bstring;
 }
 
 struct FailureReport {
-  public phase: string;
-  public message: string;
+  public phase: bstring;
+  public message: bstring;
   public location: LocationReport;
 }
 
 struct CaseReport {
-  public name: string;
+  public name: bstring;
   public passed: boolean;
-  public message: string;
-  public status: string;
+  public message: bstring;
+  public status: bstring;
   public durationNs: int64;
   public failures: FailureReport[];
 }
 
 struct SummaryReport {
-  public suite: string;
+  public suite: bstring;
   public failOnTodo: boolean;
   public passed: int;
   public failed: int;
@@ -669,64 +669,64 @@ struct SuiteReport {
 }
 
 struct JUnitCase {
-  name: string;
-  classname: string;
-  status: string;
-  message: string;
+  name: bstring;
+  classname: bstring;
+  status: bstring;
+  message: bstring;
   durationNs: int64;
   failures: FailureReport[];
 }
 
 struct JUnitFile {
-  path: string;
-  output: string;
+  path: bstring;
+  output: bstring;
   durationNs: int64;
   cases: JUnitCase[];
 }
 
 struct ReportedSuite {
-  raw: string;
+  raw: bstring;
   report: SuiteReport;
 }
 
 struct FileExecution {
   executed: boolean;
-  output: string;
+  output: bstring;
   durationNs: int64;
   runError: error;
-  reportFailure: string;
+  reportFailure: bstring;
   fatalError: error;
   suites: ReportedSuite[];
-  rawReport: string;
+  rawReport: bstring;
   expectedExit: boolean;
 }
 
 struct SourceSnapshot {
-  public original: string;
-  public archived: string;
-  public importPath: string;
-  public sha256: string;
+  public original: bstring;
+  public archived: bstring;
+  public importPath: bstring;
+  public sha256: bstring;
 }
 
 struct ArtifactFile {
-  public file: string;
-  public directory: string;
-  public output: string;
-  public report: string;
+  public file: bstring;
+  public directory: bstring;
+  public output: bstring;
+  public report: bstring;
   public executed: boolean;
-  public status: string;
-  public failure: string;
+  public status: bstring;
+  public failure: bstring;
   public durationNs: int64;
   public sourceAvailable: boolean;
   public source: SourceSnapshot;
-  public profile: string;
-  public html: string;
-  public error: string;
+  public profile: bstring;
+  public html: bstring;
+  public error: bstring;
 }
 
 struct ArtifactManifest {
   public version: int;
-  public coverage: string;
+  public coverage: bstring;
   public files: ArtifactFile[];
   public repeatIndex: int;
   public repeatCount: int;
@@ -737,13 +737,13 @@ function emptySourceSnapshot(): SourceSnapshot {
 }
 
 class ArtifactRun {
-  public directory: string;
+  public directory: bstring;
   public repeatIndex: int;
   public repeatCount: int;
-  private coverage: string;
+  private coverage: bstring;
   private files: ArtifactFile[];
 
-  constructor(directory: string, files: string[], coverage: string) {
+  constructor(directory: bstring, files: bstring[], coverage: bstring) {
     this.directory = directory;
     this.repeatIndex = 1;
     this.repeatCount = 1;
@@ -755,7 +755,7 @@ class ArtifactRun {
     }
   }
 
-  public function fileDirectory(file: string): string {
+  public function fileDirectory(file: bstring): bstring {
     for (const entry of this.files) {
       if (entry.file == file) {
         return entry.directory;
@@ -764,7 +764,7 @@ class ArtifactRun {
     return "";
   }
 
-  public function collect(file: string, execution: FileExecution, coverageProfile: string): error {
+  public function collect(file: bstring, execution: FileExecution, coverageProfile: bstring): error {
     for (let index = 0; index < len(this.files); index++) {
       if (this.files[index].file != file) {
         continue;
@@ -844,7 +844,7 @@ class ArtifactRun {
   }
 }
 
-function prepareArtifacts(directory: string, files: string[], coverage: string): Result<ArtifactRun> {
+function prepareArtifacts(directory: bstring, files: bstring[], coverage: bstring): Result<ArtifactRun> {
   const absolute = filepath.Abs(directory)?;
   const createError = os.MkdirAll(absolute, 0o755);
   if (createError != nil) {
@@ -861,7 +861,7 @@ function prepareArtifacts(directory: string, files: string[], coverage: string):
   return ok(artifacts);
 }
 
-function generatedSourceDirectory(file: string): Result<string> {
+function generatedSourceDirectory(file: bstring): Result<bstring> {
   const absolute = filepath.Abs(file)?;
   const start = filepath.Dir(absolute);
   let directory = start;
@@ -879,13 +879,13 @@ function generatedSourceDirectory(file: string): Result<string> {
   }
   const working = os.Getwd()?;
   const relative = filepath.Rel(working, absolute)?;
-  if (relative != ".." && !strings.HasPrefix(relative, ".." + string(os.PathSeparator))) {
+  if (relative != ".." && !strings.HasPrefix(relative, ".." + bstring(os.PathSeparator))) {
     return ok(filepath.Join(working, ".kinmokusei", "gen"));
   }
   return ok(filepath.Join(start, ".kinmokusei", "gen"));
 }
 
-function archiveGeneratedSource(file: string, executable: string, directory: string): error {
+function archiveGeneratedSource(file: bstring, executable: bstring, directory: bstring): error {
   const [generated, rootError] = generatedSourceDirectory(file);
   if (rootError != nil) {
     return rootError;
@@ -918,12 +918,12 @@ function archiveGeneratedSource(file: string, executable: string, directory: str
   return os.WriteFile(filepath.Join(directory, "source.json"), data, 0o644);
 }
 
-function archiveCoverage(original: string, profile: string, html: string, snapshot: SourceSnapshot): error {
+function archiveCoverage(original: bstring, profile: bstring, html: bstring, snapshot: SourceSnapshot): error {
   const [data, readError] = os.ReadFile(original);
   if (readError != nil) {
     return readError;
   }
-  let lines = strings.Split(string(data), "\n");
+  let lines = strings.Split(bstring(data), "\n");
   const prefix = snapshot.importPath + "/generated.go:";
   let remapped = false;
   for (let index = 1; index < len(lines); index++) {
@@ -942,35 +942,35 @@ function archiveCoverage(original: string, profile: string, html: string, snapsh
   const command = exec.Command("go", "tool", "cover", "-html=" + profile, "-o", html);
   const [output, convertError] = command.CombinedOutput();
   if (convertError != nil) {
-    return fmt.Errorf("coverage HTML failed: %w: %s", convertError, strings.TrimSpace(string(output)));
+    return fmt.Errorf("coverage HTML failed: %w: %s", convertError, strings.TrimSpace(bstring(output)));
   }
   return nil;
 }
 
 struct CoverageFile {
-  public file: string;
-  public data: string;
-  public profile: string;
+  public file: bstring;
+  public data: bstring;
+  public profile: bstring;
   public executed: boolean;
   public available: boolean;
-  public error: string;
+  public error: bstring;
 }
 
 struct CoverageManifest {
   public version: int;
-  public source: string;
+  public source: bstring;
   public files: CoverageFile[];
   public repeatIndex: int;
   public repeatCount: int;
 }
 
 class CoverageRun {
-  public directory: string;
+  public directory: bstring;
   public repeatIndex: int;
   public repeatCount: int;
   private files: CoverageFile[];
 
-  constructor(directory: string, files: string[]) {
+  constructor(directory: bstring, files: bstring[]) {
     this.directory = directory;
     this.repeatIndex = 1;
     this.repeatCount = 1;
@@ -981,7 +981,7 @@ class CoverageRun {
     }
   }
 
-  public function dataDirectory(file: string): string {
+  public function dataDirectory(file: bstring): bstring {
     for (const entry of this.files) {
       if (entry.file == file) {
         return entry.data;
@@ -990,7 +990,7 @@ class CoverageRun {
     return "";
   }
 
-  public function profilePath(file: string): string {
+  public function profilePath(file: bstring): bstring {
     for (const entry of this.files) {
       if (entry.file == file && entry.available) {
         return entry.profile;
@@ -999,7 +999,7 @@ class CoverageRun {
     return "";
   }
 
-  public function collect(file: string, runError: error): error {
+  public function collect(file: bstring, runError: error): error {
     for (let index = 0; index < len(this.files); index++) {
       if (this.files[index].file != file) {
         continue;
@@ -1026,7 +1026,7 @@ class CoverageRun {
       }
       const command = exec.Command("go", "tool", "covdata", "textfmt", "-i=" + entry.data, "-o=" + entry.profile);
       const [output, convertError] = command.CombinedOutput();
-      let conversionMessage = strings.TrimSpace(string(output));
+      let conversionMessage = strings.TrimSpace(bstring(output));
       if (convertError != nil) {
         conversionMessage = convertError.Error() + ": " + conversionMessage;
       }
@@ -1039,7 +1039,7 @@ class CoverageRun {
         this.files[index].error = profileError.Error();
         return profileError;
       }
-      const profileText = string(profileData);
+      const profileText = bstring(profileData);
       if (!strings.HasPrefix(profileText, "mode: atomic\n") || len(strings.Split(strings.TrimSpace(profileText), "\n")) < 2) {
         this.files[index].error = "coverage conversion produced no atomic statement data";
         return errors.New(this.files[index].error);
@@ -1063,7 +1063,7 @@ class CoverageRun {
   }
 }
 
-function prepareCoverage(directory: string, files: string[]): Result<CoverageRun> {
+function prepareCoverage(directory: bstring, files: bstring[]): Result<CoverageRun> {
   const absolute = filepath.Abs(directory)?;
   const createError = os.MkdirAll(absolute, 0o755);
   if (createError != nil) {
@@ -1081,8 +1081,8 @@ function prepareCoverage(directory: string, files: string[]): Result<CoverageRun
 }
 
 class FileScheduler {
-  private files: string[];
-  private execute: (file: string) => FileExecution;
+  private files: bstring[];
+  private execute: (file: bstring) => FileExecution;
   private bail: boolean;
   private next: int;
   private stopped: boolean;
@@ -1090,7 +1090,7 @@ class FileScheduler {
   private mutex: sync.Mutex;
   private workers: sync.WaitGroup;
 
-  constructor(files: string[], execute: (file: string) => FileExecution, bail: boolean) {
+  constructor(files: bstring[], execute: (file: bstring) => FileExecution, bail: boolean) {
     this.files = files;
     this.execute = execute;
     this.bail = bail;
@@ -1144,7 +1144,7 @@ function main(): void {
   }
 }
 
-function run(args: string[]): int {
+function run(args: bstring[]): int {
   const [input, configError] = prepareRunnerInput(args);
   if (configError != nil) {
     fmt.Fprintln(os.Stderr, "configuration error:", configError.Error());
@@ -1156,43 +1156,43 @@ function run(args: string[]): int {
   let failOnTodo = false;
   let updateSnapshots = false;
   let pathProvided = false;
-  let filter = "";
+  let filter: bstring = "";
   let awaitingFilter = false;
-  let timeoutText = "";
+  let timeoutText: bstring = "";
   let awaitingTimeout = false;
-  let shuffleText = "";
+  let shuffleText: bstring = "";
   let awaitingShuffle = false;
-  let shardText = "";
+  let shardText: bstring = "";
   let awaitingShard = false;
-  let reporter = "text";
+  let reporter: bstring = "text";
   let awaitingReporter = false;
-  let repeatText = "";
+  let repeatText: bstring = "";
   let repeatProvided = false;
   let awaitingRepeat = false;
-  let jobsText = "";
+  let jobsText: bstring = "";
   let jobsProvided = false;
   let awaitingJobs = false;
   let watch = false;
-  let watchIntervalText = "";
+  let watchIntervalText: bstring = "";
   let watchIntervalProvided = false;
   let awaitingWatchInterval = false;
-  let coverageDirectory = "";
+  let coverageDirectory: bstring = "";
   let coverageProvided = false;
   let awaitingCoverage = false;
-  let artifactDirectory = "";
+  let artifactDirectory: bstring = "";
   let artifactsProvided = false;
   let awaitingArtifacts = false;
-  let saveFailures = "";
-  let rerunFailures = "";
+  let saveFailures: bstring = "";
+  let rerunFailures: bstring = "";
   let awaitingSaveFailures = false;
   let awaitingRerunFailures = false;
-  let includes: string[] = [];
-  let excludes: string[] = [];
+  let includes: bstring[] = [];
+  let excludes: bstring[] = [];
   let includeProvided = false;
   let excludeProvided = false;
   let awaitingInclude = false;
   let awaitingExclude = false;
-  let onceArgs: string[] = [];
+  let onceArgs: bstring[] = [];
   for (const argument of input.controls) {
     onceArgs = append(onceArgs, argument);
   }
@@ -1360,7 +1360,7 @@ function run(args: string[]): int {
       return 0;
     }
     if (argument == "--version") {
-      fmt.Println("vasest 0.1.0");
+      fmt.Println("vasest 0.1.1");
       return 0;
     }
     if (argument == "--include") {
@@ -1607,7 +1607,7 @@ function run(args: string[]): int {
     // Keep one output protocol for the lifetime of the watch session.
     onceArgs = append(onceArgs, "--reporter", reporter);
     let currentRoots = roots;
-    return watchLoopWithSignature(ctx, watchInterval, (): Result<string> => {
+    return watchLoopWithSignature(ctx, watchInterval, (): Result<bstring> => {
       const [currentInput, inputError] = prepareRunnerInput(args);
       if (inputError == nil) {
         const [updatedRoots, updateError] = watchRoots(currentInput.path);
@@ -1618,7 +1618,7 @@ function run(args: string[]): int {
       }
       // Invalid/deleted configuration still contributes to the signature, so
       // a later edit can recover the watch session after a status-2 run.
-      let watched: string[] = [];
+      let watched: bstring[] = [];
       for (const root of currentRoots) {
         watched = append(watched, root);
       }
@@ -1660,7 +1660,7 @@ function run(args: string[]): int {
   const fileNoMatch = len(eligibleFiles) == 0;
   const excludedFiles = len(discoveredFiles) - len(eligibleFiles);
   const shardedFiles = shardFiles(eligibleFiles, shardIndex, shardCount);
-  let files: string[] = [];
+  let files: bstring[] = [];
   let history = FailureHistory { version: 1, files: [] };
   let hasHistoryFile = false;
   if (rerunFailures != "") {
@@ -1741,7 +1741,7 @@ function run(args: string[]): int {
   if (keika == "") {
     keika = "keika";
   }
-  let matchLog = "";
+  let matchLog: bstring = "";
   if (filter != "" || rerunFailures != "") {
     const [logFile, createError] = os.CreateTemp("", "vasest-matches-*");
     if (createError != nil) {
@@ -1761,17 +1761,17 @@ function run(args: string[]): int {
   let executed = 0;
   let repeatsStarted = 0;
   let junitFiles: JUnitFile[] = [];
-  let coverageError = "";
-  let artifactError = "";
-  let runnerError = "";
+  let coverageError: bstring = "";
+  let artifactError: bstring = "";
+  let runnerError: bstring = "";
   let failedEntries: FailedFile[] = [];
-  let historyError = "";
+  let historyError: bstring = "";
   let noMatch = fileNoMatch || (rerunFailures != "" && len(history.files) > 0 && len(shardedFiles) > 0 && !hasHistoryFile);
   for (let iteration = 1; iteration <= repeat; iteration++) {
     repeatsStarted++;
     const failedBefore = failed;
-    const repeatEnv: string[] = ["VASEST_REPEAT_INDEX=" + strconv.Itoa(iteration), "VASEST_REPEAT_COUNT=" + strconv.Itoa(repeat)];
-    let repeatJSON = "";
+    const repeatEnv: bstring[] = ["VASEST_REPEAT_INDEX=" + strconv.Itoa(iteration), "VASEST_REPEAT_COUNT=" + strconv.Itoa(repeat)];
+    let repeatJSON: bstring = "";
     if (repeat > 1) {
       repeatJSON = fmt.Sprintf(",\"repeatIndex\":%d,\"repeatCount\":%d", iteration, repeat);
       if (reporter == "text") {
@@ -1789,8 +1789,8 @@ function run(args: string[]): int {
     }
     let parallelResults: FileExecution[] = [];
     let buildMutex = sync.Mutex {};
-    let coverage: CoverageRun = nil;
-    let artifacts: ArtifactRun = nil;
+    let coverage: CoverageRun | null = null;
+    let artifacts: ArtifactRun | null = null;
     if (coverageProvided) {
       const [prepared, prepareError] = prepareCoverage(coverageDirectory, files);
       if (prepareError != nil) {
@@ -1802,8 +1802,8 @@ function run(args: string[]): int {
       coverage.repeatCount = repeat;
     }
     if (artifactsProvided) {
-      let coverageRun = "";
-      if (coverage != nil) {
+      let coverageRun: bstring = "";
+      if (coverage != null) {
         coverageRun = coverage.directory;
       }
       const [prepared, prepareError] = prepareArtifacts(artifactDirectory, files, coverageRun);
@@ -1816,13 +1816,13 @@ function run(args: string[]): int {
       artifacts.repeatCount = repeat;
     }
     if (jobs > 1) {
-      const scheduler = new FileScheduler(files, (file: string): FileExecution => {
-        let dataDirectory = "";
-        if (coverage != nil) {
+      const scheduler = new FileScheduler(files, (file: bstring): FileExecution => {
+        let dataDirectory: bstring = "";
+        if (coverage != null) {
           dataDirectory = coverage.dataDirectory(file);
         }
-        let artifactData = "";
-        if (artifacts != nil) {
+        let artifactData: bstring = "";
+        if (artifacts != null) {
           artifactData = artifacts.fileDirectory(file);
         }
         const [selection, selectionError] = rerunSelection(history, rerunFailures, file);
@@ -1839,12 +1839,12 @@ function run(args: string[]): int {
       if (jobs > 1) {
         execution = parallelResults[fileIndex];
       } else {
-        let dataDirectory = "";
-        if (coverage != nil) {
+        let dataDirectory: bstring = "";
+        if (coverage != null) {
           dataDirectory = coverage.dataDirectory(file);
         }
-        let artifactData = "";
-        if (artifacts != nil) {
+        let artifactData: bstring = "";
+        if (artifacts != null) {
           artifactData = artifacts.fileDirectory(file);
         }
         const [selection, selectionError] = rerunSelection(history, rerunFailures, file);
@@ -1863,15 +1863,15 @@ function run(args: string[]): int {
       if (failureEntry.wholeFile || len(failureEntry.suites) > 0) {
         failedEntries = mergeFailure(failedEntries, failureEntry);
       }
-      if (coverage != nil) {
+      if (coverage != null) {
         const collectError = coverage.collect(file, execution.runError);
         if (collectError != nil) {
           coverageError = collectError.Error();
         }
       }
-      if (artifacts != nil) {
-        let profile = "";
-        if (coverage != nil) {
+      if (artifacts != null) {
+        let profile: bstring = "";
+        if (coverage != null) {
           profile = coverage.profilePath(file);
         }
         const collectError = artifacts.collect(file, execution, profile);
@@ -1881,11 +1881,11 @@ function run(args: string[]): int {
       }
       if (execution.fatalError != nil) {
         runnerError = execution.fatalError.Error();
-        if (artifacts != nil) {
+        if (artifacts != null) {
           artifactError = runnerError;
         }
       }
-      if ((jobs > 1 || artifacts != nil || timeout > 0) && reporter == "text") {
+      if ((jobs > 1 || artifacts != null || timeout > 0) && reporter == "text") {
         fmt.Println("FILE", file);
         fmt.Print(execution.output);
       }
@@ -1950,7 +1950,7 @@ function run(args: string[]): int {
         break;
       }
     }
-    if (coverage != nil) {
+    if (coverage != null) {
       const finishError = coverage.finish();
       if (finishError != nil) {
         coverageError = finishError.Error();
@@ -1964,7 +1964,7 @@ function run(args: string[]): int {
         fmt.Fprintln(os.Stderr, "coverage error:", coverageError);
       }
     }
-    if (artifacts != nil) {
+    if (artifacts != null) {
       const finishError = artifacts.finish();
       if (finishError != nil) {
         artifactError = finishError.Error();
@@ -2019,11 +2019,11 @@ function run(args: string[]): int {
     }
     writeJUnit(junitFiles);
   } else if (reporter == "json") {
-    let seed = "";
+    let seed: bstring = "";
     if (shuffleText != "") {
       seed = shuffleText;
     }
-    let repeatSummary = "";
+    let repeatSummary: bstring = "";
     if (repeat > 1) {
       repeatSummary = fmt.Sprintf(",\"repeatCount\":%d,\"repeatsStarted\":%d", repeat, repeatsStarted);
     }
@@ -2043,24 +2043,24 @@ function run(args: string[]): int {
   return 0;
 }
 
-function jsonStrings(values: string[]): string {
+function jsonStrings(values: bstring[]): bstring {
   const [data, encodeError] = json.Marshal(values);
   if (encodeError != nil) {
     throw encodeError;
   }
-  return string(data);
+  return bstring(data);
 }
 
-function jsonText(value: string): string {
+function jsonText(value: bstring): bstring {
   const [encoded, encodeError] = json.Marshal(value);
   if (encodeError != nil) {
     throw encodeError;
   }
-  return string(encoded);
+  return bstring(encoded);
 }
 
-function shardFiles(files: string[], index: int, count: int): string[] {
-  let selected: string[] = [];
+function shardFiles(files: bstring[], index: int, count: int): bstring[] {
+  let selected: bstring[] = [];
   for (let position = 0; position < len(files); position++) {
     if (position % count == index - 1) {
       selected = append(selected, files[position]);
@@ -2069,7 +2069,7 @@ function shardFiles(files: string[], index: int, count: int): string[] {
   return selected;
 }
 
-function readSuiteReport(line: string): Result<SuiteReport> {
+function readSuiteReport(line: bstring): Result<SuiteReport> {
   if (!utf8.ValidString(line)) {
     return fail(errors.New("suite report must be valid UTF-8"));
   }
@@ -2151,7 +2151,7 @@ function readSuiteReport(line: string): Result<SuiteReport> {
   return ok(parsed);
 }
 
-function rerunReportFailure(selection: string, execution: FileExecution): string {
+function rerunReportFailure(selection: bstring, execution: FileExecution): bstring {
   if (selection == "") {
     return "";
   }
@@ -2164,7 +2164,7 @@ function rerunReportFailure(selection: string, execution: FileExecution): string
   if (chosen.all) {
     return "";
   }
-  let counts: Map<string, int> = makeMap[string, int]();
+  let counts: Map<bstring, int> = makeMap[bstring, int]();
   for (const suite of execution.suites) {
     counts[suite.report.summary.suite] = counts[suite.report.summary.suite] + 1;
   }
@@ -2193,7 +2193,7 @@ function fileExecutionError(execution: FileExecution): error {
   return errors.Join(execution.runError, execution.fatalError);
 }
 
-function fileFailureMessage(runError: error, reportFailure: string): string {
+function fileFailureMessage(runError: error, reportFailure: bstring): bstring {
   if (runError == nil) {
     return reportFailure;
   }
@@ -2207,7 +2207,7 @@ function fileFailureMessage(runError: error, reportFailure: string): string {
   return message;
 }
 
-function junitFile(path: string, output: string, durationNs: int64, cases: JUnitCase[], runError: error, reportFailure: string): JUnitFile {
+function junitFile(path: bstring, output: bstring, durationNs: int64, cases: JUnitCase[], runError: error, reportFailure: bstring): JUnitFile {
   let hasFailure = false;
   for (const testCase of cases) {
     if (testCase.status == "fail") {
@@ -2226,7 +2226,7 @@ function junitFile(path: string, output: string, durationNs: int64, cases: JUnit
   return file;
 }
 
-function xmlText(value: string): string {
+function xmlText(value: bstring): bstring {
   const valid = strings.Map((character: int32): int32 => {
     if ((character < 32 && character != 9 && character != 10 && character != 13) || character == 0xFFFE || character == 0xFFFF) {
       return -1;
@@ -2311,7 +2311,7 @@ function writeJUnit(files: JUnitFile[]): void {
   fmt.Print(document.String());
 }
 
-function shuffleFiles(files: string[], seed: int64): void {
+function shuffleFiles(files: bstring[], seed: int64): void {
   const random = rand.New(rand.NewSource(seed));
   for (let index = len(files) - 1; index > 0; index--) {
     const other = random.Intn(index + 1);
@@ -2321,7 +2321,7 @@ function shuffleFiles(files: string[], seed: int64): void {
   }
 }
 
-function executeTestFile(keika: string, file: string, filter: string, matchLog: string, bail: boolean, failOnTodo: boolean, updateSnapshots: boolean, timeout: time.Duration, shuffleText: string, reporter: string, buildMutex: *sync.Mutex, coverageDirectory: string, artifactDirectory: string, selection: string, repeatEnv: string[]): FileExecution {
+function executeTestFile(keika: bstring, file: bstring, filter: bstring, matchLog: bstring, bail: boolean, failOnTodo: boolean, updateSnapshots: boolean, timeout: time.Duration, shuffleText: bstring, reporter: bstring, buildMutex: *sync.Mutex, coverageDirectory: bstring, artifactDirectory: bstring, selection: bstring, repeatEnv: bstring[]): FileExecution {
   let result = FileExecution { executed: true, output: "", durationNs: 0, runError: nil, reportFailure: "", fatalError: nil, suites: [], rawReport: "", expectedExit: false };
   const [reportFile, createError] = os.CreateTemp("", "vasest-report-*");
   if (createError != nil) {
@@ -2354,9 +2354,9 @@ function executeTestFile(keika: string, file: string, filter: string, matchLog: 
     }
     return result;
   }
-  result.rawReport = string(data);
+  result.rawReport = bstring(data);
   const [exitData, exitReadError] = os.ReadFile(reportPath + ".exit");
-  if (exitReadError == nil && string(exitData) == "1\n" && result.runError != nil) {
+  if (exitReadError == nil && bstring(exitData) == "1\n" && result.runError != nil) {
     let exitValue = exec.ExitError {};
     const exitTarget = reflect.New(reflect.TypeOf(&exitValue));
     if (errors.As(result.runError, exitTarget.Interface())) {
@@ -2364,7 +2364,7 @@ function executeTestFile(keika: string, file: string, filter: string, matchLog: 
       result.expectedExit = values[0].Int() == 1;
     }
   }
-  for (const line of strings.Split(string(data), "\n")) {
+  for (const line of strings.Split(bstring(data), "\n")) {
     if (line == "") {
       continue;
     }
@@ -2404,7 +2404,7 @@ function buildFile(command: *exec.Cmd, buildMutex: *sync.Mutex): error {
   return command.Run();
 }
 
-function buildWithSource(command: *exec.Cmd, buildMutex: *sync.Mutex, file: string, executable: string, artifactDirectory: string, artifactFailure: *error): error {
+function buildWithSource(command: *exec.Cmd, buildMutex: *sync.Mutex, file: bstring, executable: bstring, artifactDirectory: bstring, artifactFailure: *error): error {
   if (buildMutex != nil) {
     buildMutex.Lock();
     defer buildMutex.Unlock();
@@ -2433,7 +2433,7 @@ function fileTimeoutError(timeout: time.Duration, runError: error, contextError:
   return runError;
 }
 
-function runFile(keika: string, file: string, filter: string, matchLog: string, bail: boolean, failOnTodo: boolean, updateSnapshots: boolean, timeout: time.Duration, shuffleText: string, reportPath: string, output: *bytes.Buffer, capture: boolean, buildMutex: *sync.Mutex, coverageDirectory: string, artifactDirectory: string, artifactFailure: *error, selection: string, repeatEnv: string[]): error {
+function runFile(keika: bstring, file: bstring, filter: bstring, matchLog: bstring, bail: boolean, failOnTodo: boolean, updateSnapshots: boolean, timeout: time.Duration, shuffleText: bstring, reportPath: bstring, output: *bytes.Buffer, capture: boolean, buildMutex: *sync.Mutex, coverageDirectory: bstring, artifactDirectory: bstring, artifactFailure: *error, selection: bstring, repeatEnv: bstring[]): error {
   if (timeout > 0 || buildMutex != nil || coverageDirectory != "" || artifactDirectory != "") {
     const [directory, createError] = os.MkdirTemp("", "vasest-run-*");
     if (createError != nil) {
@@ -2474,7 +2474,7 @@ function runFile(keika: string, file: string, filter: string, matchLog: string, 
   return executeFileCommand(exec.Command(keika, "run", file), file, filter, matchLog, bail, failOnTodo, updateSnapshots, shuffleText, reportPath, output, capture, true, "", selection, repeatEnv);
 }
 
-function executeFileCommand(command: *exec.Cmd, file: string, filter: string, matchLog: string, bail: boolean, failOnTodo: boolean, updateSnapshots: boolean, shuffleText: string, reportPath: string, output: *bytes.Buffer, capture: boolean, stdin: boolean, coverageDirectory: string, selection: string, repeatEnv: string[]): error {
+function executeFileCommand(command: *exec.Cmd, file: bstring, filter: bstring, matchLog: bstring, bail: boolean, failOnTodo: boolean, updateSnapshots: boolean, shuffleText: bstring, reportPath: bstring, output: *bytes.Buffer, capture: boolean, stdin: boolean, coverageDirectory: bstring, selection: bstring, repeatEnv: bstring[]): error {
   const [absoluteFile, absoluteError] = filepath.Abs(file);
   if (absoluteError != nil) {
     return fmt.Errorf("cannot resolve test file %q: %w", file, absoluteError);
@@ -2511,7 +2511,7 @@ function executeFileCommand(command: *exec.Cmd, file: string, filter: string, ma
   return command.Run();
 }
 
-function discover(path: string): Result<string[]> {
+function discover(path: bstring): Result<bstring[]> {
   const info = os.Stat(path)?;
   if (!info.IsDir()) {
     if (!strings.HasSuffix(path, ".test.km")) {
@@ -2525,12 +2525,12 @@ function discover(path: string): Result<string[]> {
   return collect(path);
 }
 
-function watchRoots(path: string): Result<string[]> {
+function watchRoots(path: bstring): Result<bstring[]> {
   const directory = os.Getwd()?;
   const absolute = filepath.Abs(path)?;
   const relative = filepath.Rel(directory, absolute)?;
   let roots = [directory];
-  if (relative == ".." || strings.HasPrefix(relative, ".." + string(os.PathSeparator)) || filepath.IsAbs(relative)) {
+  if (relative == ".." || strings.HasPrefix(relative, ".." + bstring(os.PathSeparator)) || filepath.IsAbs(relative)) {
     let root = absolute;
     if (strings.HasSuffix(root, ".test.km")) {
       root = filepath.Dir(root);
@@ -2540,12 +2540,12 @@ function watchRoots(path: string): Result<string[]> {
   return ok(roots);
 }
 
-function watchFile(path: string, includeSnapshots: boolean): boolean {
+function watchFile(path: bstring, includeSnapshots: boolean): boolean {
   const name = filepath.Base(path);
   return strings.HasSuffix(name, ".km") || strings.HasSuffix(name, ".go") || (includeSnapshots && strings.HasSuffix(name, ".snap")) || name == "go.mod" || name == "go.sum" || name == "kinmokusei.toml" || name == "kinmokusei.lock";
 }
 
-function regularFile(path: string): Result<boolean> {
+function regularFile(path: bstring): Result<boolean> {
   const [info, statError] = os.Stat(path);
   if (statError != nil) {
     if (os.IsNotExist(statError)) {
@@ -2556,7 +2556,7 @@ function regularFile(path: string): Result<boolean> {
   return ok(info.Mode().IsRegular());
 }
 
-function watchEntries(directory: string, includeSnapshots: boolean): Result<string[]> {
+function watchEntries(directory: bstring, includeSnapshots: boolean): Result<bstring[]> {
   const [entries, readError] = os.ReadDir(directory);
   if (readError != nil) {
     if (os.IsNotExist(readError)) {
@@ -2564,7 +2564,7 @@ function watchEntries(directory: string, includeSnapshots: boolean): Result<stri
     }
     return fail(readError);
   }
-  let files: string[] = [];
+  let files: bstring[] = [];
   for (const entry of entries) {
     const path = filepath.Join(directory, entry.Name());
     if (entry.IsDir()) {
@@ -2583,10 +2583,10 @@ function watchEntries(directory: string, includeSnapshots: boolean): Result<stri
   return ok(files);
 }
 
-function watchSignature(roots: string[], includeSnapshots: boolean): Result<string> {
+function watchSignature(roots: bstring[], includeSnapshots: boolean): Result<bstring> {
   const digest = sha256.New();
   for (const root of roots) {
-    let files: string[] = [];
+    let files: bstring[] = [];
     const [info, statError] = os.Stat(root);
     if (statError == nil && info.Mode().IsRegular() && strings.HasSuffix(root, ".json")) {
       // Explicit configuration roots are tracked even outside the project.
@@ -2612,15 +2612,15 @@ function watchSignature(roots: string[], includeSnapshots: boolean): Result<stri
 }
 
 class WatchChanges {
-  private previous: string;
+  private previous: bstring;
   private pending: boolean;
 
-  constructor(signature: string) {
+  constructor(signature: bstring) {
     this.previous = signature;
     this.pending = false;
   }
 
-  public function ready(signature: string): boolean {
+  public function ready(signature: bstring): boolean {
     if (signature != this.previous) {
       this.previous = signature;
       this.pending = true;
@@ -2634,13 +2634,13 @@ class WatchChanges {
   }
 }
 
-function watchLoop(ctx: context.Context, roots: string[], interval: time.Duration, includeSnapshots: boolean, execute: () => int, announce: (iteration: int) => void): int {
-  return watchLoopWithSignature(ctx, interval, (): Result<string> => {
+function watchLoop(ctx: context.Context, roots: bstring[], interval: time.Duration, includeSnapshots: boolean, execute: () => int, announce: (iteration: int) => void): int {
+  return watchLoopWithSignature(ctx, interval, (): Result<bstring> => {
     return watchSignature(roots, includeSnapshots);
   }, execute, announce);
 }
 
-function watchLoopWithSignature(ctx: context.Context, interval: time.Duration, signature: () => Result<string>, execute: () => int, announce: (iteration: int) => void): int {
+function watchLoopWithSignature(ctx: context.Context, interval: time.Duration, signature: () => Result<bstring>, execute: () => int, announce: (iteration: int) => void): int {
   const [initial, initialError] = signature();
   if (initialError != nil) {
     fmt.Fprintln(os.Stderr, "watch error:", initialError.Error());
@@ -2680,8 +2680,8 @@ function watchLoopWithSignature(ctx: context.Context, interval: time.Duration, s
   return status;
 }
 
-function collect(directory: string): Result<string[]> {
-  let found: string[] = [];
+function collect(directory: bstring): Result<bstring[]> {
+  let found: bstring[] = [];
   const entries = os.ReadDir(directory)?;
   for (const entry of entries) {
     const path = filepath.Join(directory, entry.Name());
@@ -2701,6 +2701,6 @@ function collect(directory: string): Result<string[]> {
   return ok(found);
 }
 
-function skipDirectory(name: string): boolean {
+function skipDirectory(name: bstring): boolean {
   return strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" || name == "build" || name == "dist";
 }

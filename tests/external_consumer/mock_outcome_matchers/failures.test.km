@@ -35,8 +35,8 @@ function main(): void {
   suite.test("negated empty nth message", (): void => { expectMockOutcome(empty).not.toHaveNthThrownMessage(1, ""); });
   suite.test("empty last message", (): void => { expectMockOutcome(empty).toHaveLastThrownMessage(""); });
   suite.test("negated empty last message", (): void => { expectMockOutcome(empty).not.toHaveLastThrownMessage(""); });
-  suite.test("nil source", (): void => { const source: MockOutcomeSource = nil; expectMockOutcome(source).toHaveThrown(); });
-  suite.test("typed nil source", (): void => { const source: MockAction<int> = nil; expectMockOutcome(source).not.toHaveReturned(); });
+  suite.test("nil source", (): void => { const source: MockOutcomeSource | null = null; expectMockOutcome(source).toHaveThrown(); });
+  suite.test("typed nil source", (): void => { const source: MockOutcomeSource | null = null; expectMockOutcome(source).not.toHaveReturned(); });
   suite.test("later case", (): void => { fmt.Println("mock-outcome-later"); });
   suite.runAndExit();
 }

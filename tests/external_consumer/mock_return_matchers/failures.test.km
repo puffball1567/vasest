@@ -1,4 +1,4 @@
-import { Suite, TestContext, MockFn, MockReturnSource, expectMockReturn, expectFunction } from "vasest";
+import { MockReturnExpectation, MockOutcomeSource, Suite, TestContext, MockFn, MockReturnSource, expectMockReturn, expectFunction } from "vasest";
 import go errors from "errors";
 import go fmt from "fmt";
 
@@ -28,12 +28,12 @@ function main(): void {
   suite.test("invalid index", (): void => { expectMockReturn<int>(mock).toHaveNthReturnedWith(0, 42); });
   suite.test("negated invalid index", (): void => { expectMockReturn<int>(mock).not.toHaveNthReturnedWith(0, 42); });
   suite.test("nil source", (): void => {
-    const source: MockReturnSource<int> = nil;
-    expectMockReturn<int>(source).toHaveReturned();
+    const source: MockReturnSource<int> | null = null;
+    new MockReturnExpectation<int>(source).toHaveReturned();
   });
   suite.test("typed nil source", (): void => {
-    const source: MockFn<int, int> = nil;
-    expectMockReturn<int>(source).not.toHaveReturned();
+    const source: MockReturnSource<int> | null = null;
+    new MockReturnExpectation<int>(source).not.toHaveReturned();
   });
   suite.test("last invocation threw", (): void => { expectMockReturn<int>(throwing).toHaveLastReturnedWith(0); });
   suite.test("later case", (): void => { fmt.Println("mock-return-later"); });

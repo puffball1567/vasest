@@ -3,6 +3,20 @@ import go errors from "errors";
 import go fmt from "fmt";
 import go os from "os";
 
+function extractPathError(source: error, predicate: (value: *os.PathError) => boolean): boolean {
+  let value: *os.PathError = nil;
+  return errors.As(source, &value) && predicate(value);
+}
+
+function extractAnyError(source: error, predicate: (value: error) => boolean): boolean {
+  let value: error = nil;
+  return errors.As(source, &value) && predicate(value);
+}
+
+function extractInvalidType(source: error, predicate: (value: int) => boolean): boolean {
+  return false;
+}
+
 function main(): void {
   const suite = new Suite("function type predicate failures");
   const body: () => void = (): void => { throw errors.New("body"); };
@@ -10,20 +24,20 @@ function main(): void {
   suite.afterEach((): void => { fmt.Println("function-type-predicate-afterEach"); });
   suite.testWithContext("positive predicate mismatch", (context: TestContext): void => {
     context.cleanup((): void => { fmt.Println("function-type-predicate-cleanup"); });
-    expectFunction(body).toThrowTypeSatisfying<error>((value: error): boolean => { return false; });
+    expectFunction(body).toThrowTypeSatisfying<error>((value: error): boolean => { return false; }, extractAnyError);
   });
-  suite.test("negated predicate match", (): void => { expectFunction(body).not.toThrowTypeSatisfying<error>(matches); });
-  suite.test("normal return requires throw", (): void => { expectFunction((): void => {}).toThrowTypeSatisfying<error>((value: error): boolean => { fmt.Println("unreachable-normal-predicate"); return true; }); });
-  suite.test("missing positive type", (): void => { expectFunction(body).toThrowTypeSatisfying<*os.PathError>((value: *os.PathError): boolean => { fmt.Println("unreachable-missing-predicate"); return true; }); });
-  suite.test("nil positive predicate", (): void => { expectFunction((): void => { fmt.Println("unreachable-invalid-positive-body"); }).toThrowTypeSatisfying<error>(nil); });
-  suite.test("nil negative predicate", (): void => { expectFunction((): void => { fmt.Println("unreachable-invalid-negative-body"); }).not.toThrowTypeSatisfying<error>(nil); });
-  suite.test("invalid positive type", (): void => { expectFunction((): void => { fmt.Println("unreachable-invalid-type-positive-body"); }).toThrowTypeSatisfying<int>((value: int): boolean => { fmt.Println("unreachable-invalid-positive-predicate"); return true; }); });
-  suite.test("invalid negative type", (): void => { expectFunction((): void => { fmt.Println("unreachable-invalid-type-negative-body"); }).not.toThrowTypeSatisfying<int>((value: int): boolean => { fmt.Println("unreachable-invalid-negative-predicate"); return false; }); });
-  suite.test("nil positive body", (): void => { expectFunction(nil).toThrowTypeSatisfying<error>(matches); });
-  suite.test("nil negative body", (): void => { expectFunction(nil).not.toThrowTypeSatisfying<error>(matches); });
-  suite.test("raw predicate throw", (): void => { expectFunction(body).toThrowTypeSatisfying<error>((value: error): boolean => { throw errors.New("predicate failed"); }); });
+  suite.test("negated predicate match", (): void => { expectFunction(body).not.toThrowTypeSatisfying<error>(matches, extractAnyError); });
+  suite.test("normal return requires throw", (): void => { expectFunction((): void => {}).toThrowTypeSatisfying<error>((value: error): boolean => { fmt.Println("unreachable-normal-predicate"); return true; }, extractAnyError); });
+  suite.test("missing positive type", (): void => { expectFunction(body).toThrowTypeSatisfying<*os.PathError>((value: *os.PathError): boolean => { fmt.Println("unreachable-missing-predicate"); return true; }, extractPathError); });
+  suite.test("nil positive predicate", (): void => { expectFunction((): void => { fmt.Println("unreachable-invalid-positive-body"); }).toThrowTypeSatisfying<error>(null, extractAnyError); });
+  suite.test("nil negative predicate", (): void => { expectFunction((): void => { fmt.Println("unreachable-invalid-negative-body"); }).not.toThrowTypeSatisfying<error>(null, extractAnyError); });
+  suite.test("invalid positive type", (): void => { expectFunction((): void => { fmt.Println("unreachable-invalid-type-positive-body"); }).toThrowTypeSatisfying<int>((value: int): boolean => { fmt.Println("unreachable-invalid-positive-predicate"); return true; }, extractInvalidType); });
+  suite.test("invalid negative type", (): void => { expectFunction((): void => { fmt.Println("unreachable-invalid-type-negative-body"); }).not.toThrowTypeSatisfying<int>((value: int): boolean => { fmt.Println("unreachable-invalid-negative-predicate"); return false; }, extractInvalidType); });
+  suite.test("nil positive body", (): void => { expectFunction(null).toThrowTypeSatisfying<error>(matches, extractAnyError); });
+  suite.test("nil negative body", (): void => { expectFunction(null).not.toThrowTypeSatisfying<error>(matches, extractAnyError); });
+  suite.test("raw predicate throw", (): void => { expectFunction(body).toThrowTypeSatisfying<error>((value: error): boolean => { throw errors.New("predicate failed"); }, extractAnyError); });
   suite.test("explicit predicate location", (): void => {
-    expectFunction(body).not.toThrowTypeSatisfying<error>((value: error): boolean => { withTestLocation("predicate.km", 42, (): void => { throw errors.New("predicate failed explicitly"); }); return false; });
+    expectFunction(body).not.toThrowTypeSatisfying<error>((value: error): boolean => { withTestLocation("predicate.km", 42, (): void => { throw errors.New("predicate failed explicitly"); }); return false; }, extractAnyError);
   });
   suite.test("later case", (): void => { fmt.Println("function-type-predicate-failing-later"); });
   suite.runAndExit();

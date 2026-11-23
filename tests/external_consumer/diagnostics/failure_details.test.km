@@ -1,7 +1,7 @@
 import { Suite, TestContext, TestFailure, expectEqual, fail } from "vasest";
 import go errors from "errors";
 
-function checkDetail(failure: TestFailure, phase: string, message: string): void {
+function checkDetail(failure: TestFailure, phase: bstring, message: bstring): void {
   expectEqual(failure.phase, phase);
   expectEqual(failure.message, message);
 }

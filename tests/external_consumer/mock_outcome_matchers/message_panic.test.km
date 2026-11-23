@@ -4,7 +4,7 @@ import go reflect from "reflect";
 
 class PanickingError implements error {
   constructor() {}
-  public function Error(): string { reflect.ValueOf(42).Index(0); return ""; }
+  public function Error(): bstring { reflect.ValueOf(42).Index(0); return ""; }
 }
 
 class ErrorSource implements MockOutcomeSource {

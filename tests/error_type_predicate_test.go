@@ -41,9 +41,9 @@ func TestErrorTypePredicateNegatesWholeMatchAndCallsOnce(t *testing.T) {
 				}
 				check := func() {
 					if negated {
-						NegatedErrorExpectationToMatchTypeSatisfying(expectErrorValue(actual).Not, predicate)
+						NegatedErrorExpectationToMatchTypeSatisfying(expectErrorValue(actual).Not, predicate, testErrorExtractor)
 					} else {
-						ErrorExpectationToMatchTypeSatisfying(expectErrorValue(actual), predicate)
+						ErrorExpectationToMatchTypeSatisfying(expectErrorValue(actual), predicate, testErrorExtractor)
 					}
 				}
 				if (present && accepted) == negated {
@@ -66,23 +66,23 @@ func TestErrorTypePredicateNegatesWholeMatchAndCallsOnce(t *testing.T) {
 func TestErrorTypePredicateNativeExtractionAndFreshValues(t *testing.T) {
 	original := &predicateDomainError{Code: 1<<60 + 1}
 	matcher := expectErrorValue(original)
-	ErrorExpectationToMatchTypeSatisfying(matcher, func(value *predicateDomainError) bool { value.Code++; return value == original })
-	ErrorExpectationToMatchTypeSatisfying(matcher, func(value *predicateDomainError) bool { return value.Code == 1<<60+2 })
-	ErrorExpectationToMatchTypeSatisfying[fmt.Stringer](matcher, func(value fmt.Stringer) bool { return value == original })
-	ErrorExpectationToMatchTypeSatisfying[error](matcher, func(value error) bool { return value == original })
+	ErrorExpectationToMatchTypeSatisfying(matcher, func(value *predicateDomainError) bool { value.Code++; return value == original }, testErrorExtractor)
+	ErrorExpectationToMatchTypeSatisfying(matcher, func(value *predicateDomainError) bool { return value.Code == 1<<60+2 }, testErrorExtractor)
+	ErrorExpectationToMatchTypeSatisfying[fmt.Stringer](matcher, func(value fmt.Stringer) bool { return value == original }, testErrorExtractor[fmt.Stringer])
+	ErrorExpectationToMatchTypeSatisfying[error](matcher, func(value error) bool { return value == original }, testErrorExtractor[error])
 	wrapped := fmt.Errorf("outer: %w", errors.Join(errors.New("other"), original))
-	ErrorExpectationToMatchTypeSatisfying(expectErrorValue(wrapped), func(value *predicateDomainError) bool { return value == original })
+	ErrorExpectationToMatchTypeSatisfying(expectErrorValue(wrapped), func(value *predicateDomainError) bool { return value == original }, testErrorExtractor)
 	// As selects its first assignable error; a false predicate does not restart traversal.
 	first := &predicateDomainError{Code: 1}
 	joined := expectErrorValue(errors.Join(first, original))
-	NegatedErrorExpectationToMatchTypeSatisfying(joined.Not, func(value *predicateDomainError) bool { return value == original })
+	NegatedErrorExpectationToMatchTypeSatisfying(joined.Not, func(value *predicateDomainError) bool { return value == original }, testErrorExtractor)
 	for _, actual := range []error{nil, errors.New("missing")} {
-		NegatedErrorExpectationToMatchTypeSatisfying(expectErrorValue(actual).Not, func(*predicateDomainError) bool { t.Fatal("no type match invoked predicate"); return true })
+		NegatedErrorExpectationToMatchTypeSatisfying(expectErrorValue(actual).Not, func(*predicateDomainError) bool { t.Fatal("no type match invoked predicate"); return true }, testErrorExtractor)
 	}
-	ErrorExpectationToMatchTypeSatisfying(expectErrorValue((*predicateDomainError)(nil)), func(value *predicateDomainError) bool { return value == nil })
+	ErrorExpectationToMatchTypeSatisfying(expectErrorValue((*predicateDomainError)(nil)), func(value *predicateDomainError) bool { return value == nil }, testErrorExtractor)
 	// Named slice error values need no comparable constraint and keep their backing slice.
 	values := assertionSliceError{1, 2}
-	ErrorExpectationToMatchTypeSatisfying(expectErrorValue(values), func(value assertionSliceError) bool { value[0] = 7; return len(value) == 2 })
+	ErrorExpectationToMatchTypeSatisfying(expectErrorValue(values), func(value assertionSliceError) bool { value[0] = 7; return len(value) == 2 }, testErrorExtractor)
 	if values[0] != 7 {
 		t.Fatal(values)
 	}
@@ -99,27 +99,33 @@ func TestErrorTypePredicateCustomAsIncludingNilInterfaces(t *testing.T) {
 	}}
 	matcher := expectErrorValue(actual)
 	predicate := func(value *predicateDomainError) bool { predicates++; return value == original }
-	ErrorExpectationToMatchTypeSatisfying(matcher, predicate)
+	ErrorExpectationToMatchTypeSatisfying(matcher, predicate, testErrorExtractor)
 	matched = false
-	NegatedErrorExpectationToMatchTypeSatisfying(matcher.Not, predicate)
+	NegatedErrorExpectationToMatchTypeSatisfying(matcher.Not, predicate, testErrorExtractor)
 	if asCalls != 2 || predicates != 1 {
 		t.Fatal(asCalls, predicates)
 	}
 	// A native custom As can report success with a nil interface destination.
 	nilMatch := expectErrorValue(predicateAsError{as: func(target any) bool { *target.(*fmt.Stringer) = nil; return true }})
-	ErrorExpectationToMatchTypeSatisfying[fmt.Stringer](nilMatch, func(value fmt.Stringer) bool { return value == nil })
-	NegatedErrorExpectationToMatchTypeSatisfying[fmt.Stringer](nilMatch.Not, func(value fmt.Stringer) bool { return value != nil })
+	ErrorExpectationToMatchTypeSatisfying[fmt.Stringer](nilMatch, func(value fmt.Stringer) bool { return value == nil }, testErrorExtractor[fmt.Stringer])
+	NegatedErrorExpectationToMatchTypeSatisfying[fmt.Stringer](nilMatch.Not, func(value fmt.Stringer) bool { return value != nil }, testErrorExtractor[fmt.Stringer])
 }
 
 func TestErrorTypePredicateValidationAndCallerLocation(t *testing.T) {
 	asCalls, predicates := 0, 0
 	matcher := expectErrorValue(predicateAsError{as: func(any) bool { asCalls++; return false }})
-	assertThrownMessage(t, "predicate must not be nil", func() { ErrorExpectationToMatchTypeSatisfying[*predicateDomainError](matcher, nil) })
-	assertThrownMessage(t, "predicate must not be nil", func() { NegatedErrorExpectationToMatchTypeSatisfying[*predicateDomainError](matcher.Not, nil) })
+	assertThrownMessage(t, "predicate must not be nil", func() {
+		ErrorExpectationToMatchTypeSatisfying[*predicateDomainError](matcher, nil, testErrorExtractor[*predicateDomainError])
+	})
+	assertThrownMessage(t, "predicate must not be nil", func() {
+		NegatedErrorExpectationToMatchTypeSatisfying[*predicateDomainError](matcher.Not, nil, testErrorExtractor[*predicateDomainError])
+	})
 	for _, actual := range []error{nil, matcher.actual} {
 		invalid := func(int) bool { predicates++; return true }
-		assertThrownMessage(t, "requires an error type or interface, got int", func() { ErrorExpectationToMatchTypeSatisfying(expectErrorValue(actual), invalid) })
-		assertThrownMessage(t, "requires an error type or interface, got int", func() { NegatedErrorExpectationToMatchTypeSatisfying(expectErrorValue(actual).Not, invalid) })
+		assertThrownMessage(t, "requires an error type or interface, got int", func() { ErrorExpectationToMatchTypeSatisfying(expectErrorValue(actual), invalid, testErrorExtractor) })
+		assertThrownMessage(t, "requires an error type or interface, got int", func() {
+			NegatedErrorExpectationToMatchTypeSatisfying(expectErrorValue(actual).Not, invalid, testErrorExtractor)
+		})
 	}
 	if asCalls != 0 || predicates != 0 {
 		t.Fatal("validation touched callbacks", asCalls, predicates)
@@ -133,27 +139,27 @@ func TestErrorTypePredicateValidationAndCallerLocation(t *testing.T) {
 	checks := []func(){
 		func() {
 			record()
-			ErrorExpectationToMatchTypeSatisfying(domain, func(*predicateDomainError) bool { return false })
+			ErrorExpectationToMatchTypeSatisfying(domain, func(*predicateDomainError) bool { return false }, testErrorExtractor)
 		},
 		func() {
 			record()
-			NegatedErrorExpectationToMatchTypeSatisfying(domain.Not, func(*predicateDomainError) bool { return true })
+			NegatedErrorExpectationToMatchTypeSatisfying(domain.Not, func(*predicateDomainError) bool { return true }, testErrorExtractor)
 		},
 		func() {
 			record()
-			ErrorExpectationToMatchTypeSatisfying[*predicateDomainError](matcher, nil)
+			ErrorExpectationToMatchTypeSatisfying[*predicateDomainError](matcher, nil, testErrorExtractor[*predicateDomainError])
 		},
 		func() {
 			record()
-			NegatedErrorExpectationToMatchTypeSatisfying[*predicateDomainError](matcher.Not, nil)
+			NegatedErrorExpectationToMatchTypeSatisfying[*predicateDomainError](matcher.Not, nil, testErrorExtractor[*predicateDomainError])
 		},
 		func() {
 			record()
-			ErrorExpectationToMatchTypeSatisfying(matcher, func(int) bool { return true })
+			ErrorExpectationToMatchTypeSatisfying(matcher, func(int) bool { return true }, testErrorExtractor)
 		},
 		func() {
 			record()
-			NegatedErrorExpectationToMatchTypeSatisfying(matcher.Not, func(int) bool { return true })
+			NegatedErrorExpectationToMatchTypeSatisfying(matcher.Not, func(int) bool { return true }, testErrorExtractor)
 		},
 	}
 	for _, check := range checks {
@@ -180,9 +186,9 @@ func TestErrorTypePredicatePreservesCallbackAndAsControlFlow(t *testing.T) {
 				predicate := func(*predicateDomainError) bool { body(); return false }
 				check := func() {
 					if negated {
-						NegatedErrorExpectationToMatchTypeSatisfying(expectErrorValue(actual).Not, predicate)
+						NegatedErrorExpectationToMatchTypeSatisfying(expectErrorValue(actual).Not, predicate, testErrorExtractor)
 					} else {
-						ErrorExpectationToMatchTypeSatisfying(expectErrorValue(actual), predicate)
+						ErrorExpectationToMatchTypeSatisfying(expectErrorValue(actual), predicate, testErrorExtractor)
 					}
 				}
 				if got := expectThrows(check); got != cause {
@@ -195,9 +201,9 @@ func TestErrorTypePredicatePreservesCallbackAndAsControlFlow(t *testing.T) {
 		check := func() {
 			predicate := func(*predicateDomainError) bool { panic(__kinmokuseiThrown{err: nil}) }
 			if negated {
-				NegatedErrorExpectationToMatchTypeSatisfying(expectErrorValue(&predicateDomainError{}).Not, predicate)
+				NegatedErrorExpectationToMatchTypeSatisfying(expectErrorValue(&predicateDomainError{}).Not, predicate, testErrorExtractor)
 			} else {
-				ErrorExpectationToMatchTypeSatisfying(expectErrorValue(&predicateDomainError{}), predicate)
+				ErrorExpectationToMatchTypeSatisfying(expectErrorValue(&predicateDomainError{}), predicate, testErrorExtractor)
 			}
 		}
 		if got := expectThrows(check); got != nil {
@@ -220,7 +226,7 @@ func TestErrorTypePredicatePreservesCallbackAndAsControlFlow(t *testing.T) {
 				if inAs {
 					actual = predicateAsError{as: func(any) bool { body(); return false }}
 				}
-				ErrorExpectationToMatchTypeSatisfying(expectErrorValue(actual), func(*predicateDomainError) bool { body(); return false })
+				ErrorExpectationToMatchTypeSatisfying(expectErrorValue(actual), func(*predicateDomainError) bool { body(); return false }, testErrorExtractor)
 				t.Fatal("continued after callback")
 			})
 			if nativePanic {

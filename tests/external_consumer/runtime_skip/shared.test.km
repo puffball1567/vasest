@@ -2,17 +2,17 @@ import { FixtureSuite, TestContext, skipTest } from "vasest";
 import go fmt from "fmt";
 
 function main(): void {
-  const suite = new FixtureSuite<string>("shared skip", (context: TestContext): string => {
+  const suite = new FixtureSuite<bstring>("shared skip", (context: TestContext): bstring => {
     const path = context.tempDir();
     context.cleanup((): void => { fmt.Println("shared-resource-cleanup"); });
     skipTest("database unavailable");
     return path;
   });
-  suite.beforeAll((path: string): void => { fmt.Println("unreachable-shared-beforeAll"); });
-  suite.afterAll((path: string): void => { fmt.Println("unreachable-shared-afterAll"); });
-  suite.test("shared first", (path: string, context: TestContext): void => { fmt.Println("unreachable-shared-body"); });
-  suite.test("shared second", (path: string, context: TestContext): void => { fmt.Println("unreachable-shared-body"); });
-  suite.skip("disabled", (path: string, context: TestContext): void => {});
+  suite.beforeAll((path: bstring): void => { fmt.Println("unreachable-shared-beforeAll"); });
+  suite.afterAll((path: bstring): void => { fmt.Println("unreachable-shared-afterAll"); });
+  suite.test("shared first", (path: bstring, context: TestContext): void => { fmt.Println("unreachable-shared-body"); });
+  suite.test("shared second", (path: bstring, context: TestContext): void => { fmt.Println("unreachable-shared-body"); });
+  suite.skip("disabled", (path: bstring, context: TestContext): void => {});
   suite.todo("planned");
   suite.runAndExit();
 }

@@ -2,5 +2,5 @@ import { MockAction, expectMockOutcome } from "vasest";
 import go os from "os";
 function main(): void {
   const action = new MockAction<int>((value: int): void => {});
-  expectMockOutcome(action).toHaveLastThrownType<error>("destination");
+  expectMockOutcome(action).toHaveLastThrownType<error>("destination", (source, target) => false);
 }

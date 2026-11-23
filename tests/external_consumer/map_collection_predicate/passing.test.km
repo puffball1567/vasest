@@ -10,6 +10,8 @@ class Record {
   constructor(value: int) { this.value = value; }
 }
 
+alias MapEntryPredicate = (key: UserID, value: Score) => boolean;
+
 function main(): void {
   const suite = new Suite("typed map collection predicates");
   suite.test("native keys values and aggregate negation", (): void => {
@@ -33,7 +35,7 @@ function main(): void {
     expect(calls).toEqual(4);
     matcher.not.toSatisfyAny((key: UserID, value: Score): boolean => { calls++; return false; });
     expect(calls).toEqual(6);
-    const checkAny: (predicate: (key: UserID, value: Score) => boolean) => void = matcher.toSatisfyAny;
+    const checkAny: (predicate: MapEntryPredicate | null) => void = matcher.toSatisfyAny;
     checkAny(positive);
   });
   suite.test("empty and nil maps invoke no callback", (): void => {

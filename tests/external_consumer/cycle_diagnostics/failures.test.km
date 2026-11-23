@@ -9,8 +9,8 @@ class Loop {
 }
 
 class Node {
-  public next: Node;
-  constructor(next: Node) { this.next = next; }
+  public next: Node | null;
+  constructor(next: Node | null) { this.next = next; }
 }
 
 function main(): void {
@@ -46,9 +46,9 @@ function main(): void {
     withTestLocation("domain-check.km", 42, (): void => { expect<Loop>(value).toEqual(other); });
   });
   suite.test("diagnostic depth limit", (): void => {
-    let node: Node = nil;
+    let node: Node | null = null;
     for (let index = 0; index < 100; index++) { node = new Node(node); }
-    expect<Node>(node).not.toEqual(node);
+    expect<Node | null>(node).not.toEqual(node);
   });
   suite.test("diagnostic breadth limit", (): void => {
     let values: int[] = [];
@@ -57,7 +57,7 @@ function main(): void {
   });
   suite.test("later case", (): void => {
     expect(mock.callCount()).toEqual(1);
-    expect(children["self"].label).toEqual(42);
+    expect(children["self"]!.label).toEqual(42);
     fmt.Println("cycle-diagnostic-failing-later");
   });
   suite.runAndExit();

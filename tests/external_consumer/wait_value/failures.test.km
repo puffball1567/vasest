@@ -19,8 +19,8 @@ function main(): void {
       return true;
     }, 5 * time.Millisecond, time.Millisecond);
   });
-  suite.test("nil read", (): void => { waitForValue<int>(nil, (value: int): boolean => { return true; }, time.Second, time.Millisecond); });
-  suite.test("nil predicate", (): void => { waitForValue<int>((): int => { return 42; }, nil, time.Second, time.Millisecond); });
+  suite.test("nil read", (): void => { waitForValue<int>(null, (value: int): boolean => { return true; }, time.Second, time.Millisecond); });
+  suite.test("nil predicate", (): void => { waitForValue<int>((): int => { return 42; }, null, time.Second, time.Millisecond); });
   suite.test("invalid timeout", (): void => { waitForValue<int>((): int => { return 42; }, (value: int): boolean => { return true; }, 0, time.Millisecond); });
   suite.test("invalid interval", (): void => { waitForValue<int>((): int => { return 42; }, (value: int): boolean => { return true; }, time.Second, -time.Millisecond); });
   suite.test("joined skip remains a failure", (): void => {

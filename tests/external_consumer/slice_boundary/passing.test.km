@@ -6,9 +6,11 @@ type UserID = distinct uint64;
 
 class Node {
   public value: int;
-  public next: Node;
-  constructor(value: int) { this.value = value; this.next = nil; }
+  public next: Node | null;
+  constructor(value: int) { this.value = value; this.next = null; }
 }
+
+alias OptionalNode = Node | null;
 
 function main(): void {
   const suite = new Suite("typed slice boundaries");
@@ -62,14 +64,14 @@ function main(): void {
     const second = new Node(42);
     first.next = first;
     second.next = second;
-    const fromStart: Node[] = [first, nil];
-    const fromEnd: Node[] = [nil, first];
-    expectSlice<Node>(fromStart).toStartWith([second]);
-    expectSlice<Node>(fromEnd).toEndWith([second]);
+    const fromStart: OptionalNode[] = [first, null];
+    const fromEnd: OptionalNode[] = [null, first];
+    expectSlice<OptionalNode>(fromStart).toStartWith([second]);
+    expectSlice<OptionalNode>(fromEnd).toEndWith([second]);
     second.value = 43;
-    expectSlice<Node>([first]).not.toStartWith([second]);
-    expectSlice<Node>([first]).not.toEndWith([second]);
-    expect<Node>(first.next).toBe(first);
+    expectSlice<OptionalNode>([first]).not.toStartWith([second]);
+    expectSlice<OptionalNode>([first]).not.toEndWith([second]);
+    expect<Node | null>(first.next).toBe(first);
     const nans: float64[] = [math.NaN()];
     expectSlice<float64>(nans).not.toStartWith(nans);
     expectSlice<float64>(nans).not.toEndWith(nans);

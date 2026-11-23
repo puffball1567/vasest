@@ -41,6 +41,7 @@ cp tests/context_hooks_test.go "$test_dir/"
 cp tests/mock_reset_test.go "$test_dir/"
 cp tests/function_throw_predicate_test.go "$test_dir/"
 cp tests/error_type_predicate_test.go "$test_dir/"
+cp tests/error_adapter_test.go "$test_dir/"
 cp tests/function_type_predicate_test.go "$test_dir/"
 cp tests/mock_type_predicate_test.go "$test_dir/"
 cp tests/mock_throw_behavior_test.go "$test_dir/"
@@ -78,7 +79,7 @@ cd "$project_dir"
 library_dir="$test_dir/library"
 consumer_dir="$test_dir/consumer"
 mkdir "$library_dir"
-cp vasest.km go.mod kinmokusei.toml kinmokusei.lock "$library_dir/"
+cp vasest.km go.mod kinmokusei.toml kinmokusei.lock LICENSE "$library_dir/"
 "$keika_command" new app --module example.com/vasest-consumer "$consumer_dir"
 mkdir "$consumer_dir/tests" "$consumer_dir/negative"
 mkdir "$consumer_dir/timeout"
@@ -257,7 +258,7 @@ cp tests/external_consumer/invalid.test.km "$consumer_dir/tests/.hidden/"
 cp tests/external_consumer/invalid.test.km "$consumer_dir/tests/node_modules/"
 
 cd "$consumer_dir"
-"$keika_command" deps add --offline --replace ../library github.com/puffball1567/vasest@v0.1.0
+"$keika_command" deps add --offline --replace ../library github.com/puffball1567/vasest@v0.1.1
 "$keika_command" check tests/passing.test.km
 "$keika_command" check tests/throws.test.km
 "$keika_command" check tests/tempdir.test.km
@@ -1078,4 +1079,24 @@ if "$test_dir/vasest" --list --bail >/dev/null 2>&1; then
 fi
 
 cd "$test_dir"
-VASEST_INTEGRATION_RUNNER="$test_dir/vasest" VASEST_INTEGRATION_CONSUMER="$consumer_dir" KEIKA="$keika_command" go test -v -timeout 20m -count=1 -run '^Test(Watch|Coverage|FailureLocations|Artifacts|ArtifactResults|Rerun|Configuration|ConfigurationWatch|FilePatterns|FilePatternsWatch|Repeat|TimeoutPipes|JUnitFileErrors|UnreadableReports|AmbiguousRerun|EvolvingRerun|NameEncoding|JSONFields|RegularDiscovery|ErrorAssertions|ErrorMatchers|FunctionMatchers|MapMatchers|MapPredicateMatchers|MapCollectionPredicate|MapEntries|StringBoundary|SliceBoundary|SliceSequence|SliceInOrder|PredicateMatchers|SlicePredicateMatchers|SliceIndexedPredicates|SliceElements|UnorderedSliceMatchers|SliceContainsAll|CycleDiagnostics|OrderedMatchers|FloatMatchers|WaitValue|IndexedTables|InactiveTables|ContextHooks|MockReset|ErrorTypePredicate|MockThrowBehavior|MockTypePredicate|FunctionTypePredicate|FunctionThrowPredicate|MockMatchers|MockPredicateMatchers|MockReturnMatchers|MockReturnPredicateMatchers|MockThrownPredicateMatchers|MockOutcomeMatchers|MockErrorMatchers|RuntimeSkip|FluentMatchers)RealKinmokusei$' ./runner
+go test -c -o "$test_dir/runner.test" ./runner
+"$test_dir/runner.test" -test.list '^Test(Watch|Coverage|FailureLocations|Artifacts|ArtifactResults|Rerun|Configuration|ConfigurationWatch|FilePatterns|FilePatternsWatch|Repeat|TimeoutPipes|JUnitFileErrors|UnreadableReports|AmbiguousRerun|EvolvingRerun|NameEncoding|JSONFields|RegularDiscovery|ErrorAssertions|ErrorMatchers|FunctionMatchers|MapMatchers|MapPredicateMatchers|MapCollectionPredicate|MapEntries|StringBoundary|SliceBoundary|SliceSequence|SliceInOrder|PredicateMatchers|SlicePredicateMatchers|SliceIndexedPredicates|SliceElements|UnorderedSliceMatchers|SliceContainsAll|CycleDiagnostics|OrderedMatchers|FloatMatchers|WaitValue|IndexedTables|InactiveTables|ContextHooks|MockReset|ErrorTypePredicate|MockThrowBehavior|MockTypePredicate|FunctionTypePredicate|FunctionThrowPredicate|MockMatchers|MockPredicateMatchers|MockReturnMatchers|MockReturnPredicateMatchers|MockThrownPredicateMatchers|MockOutcomeMatchers|MockErrorMatchers|RuntimeSkip|FluentMatchers)RealKinmokusei$' > "$test_dir/integration-tests"
+test -s "$test_dir/integration-tests"
+
+# The real compiler runs for each case. Give concurrent suites their own
+# source and build directories so they can edit and build fixtures independently.
+xargs -n 1 -P 2 sh -c '
+  set -eu
+  test_dir=$1
+  keika_command=$2
+  suite=$3
+  suite_dir=$(mktemp -d "$test_dir/case.XXXXXX")
+  cp -R "$test_dir/consumer" "$test_dir/library" "$suite_dir/"
+  status=0
+  VASEST_INTEGRATION_RUNNER="$test_dir/vasest" \
+    VASEST_INTEGRATION_CONSUMER="$suite_dir/consumer" KEIKA="$keika_command" \
+    "$test_dir/runner.test" -test.v -test.timeout=20m -test.count=1 \
+    -test.run "^$suite\$" > "$suite_dir/test.log" 2>&1 || status=$?
+  cat "$suite_dir/test.log"
+  exit "$status"
+' sh "$test_dir" "$keika_command" < "$test_dir/integration-tests"

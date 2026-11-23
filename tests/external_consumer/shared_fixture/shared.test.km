@@ -4,15 +4,15 @@ import go fmt from "fmt";
 import go os from "os";
 
 struct Resource {
-  path: string;
+  path: bstring;
 }
 
 function main(): void {
   const [original, existed] = os.LookupEnv("VASEST_SHARED_RESOURCE");
   let setups = 0;
   let cleaned = 0;
-  let sharedPath = "";
-  let casePaths: string[] = [];
+  let sharedPath: bstring = "";
+  let casePaths: bstring[] = [];
   const suite = new FixtureSuite<Resource>("shared values", (context: TestContext): Resource => {
     setups++;
     sharedPath = context.tempDir();
@@ -51,7 +51,7 @@ function main(): void {
     context.setEnv("VASEST_SHARED_RESOURCE", "case");
   };
   suite.test("success: single", body);
-  suite.testEach([1, 2], (row: int): string => {
+  suite.testEach([1, 2], (row: int): bstring => {
     return fmt.Sprintf("success: row %d", row);
   }, (row: int, resource: Resource, context: TestContext): void => {
     body(resource, context);
@@ -71,7 +71,7 @@ function main(): void {
     expectEqual(set, existed);
   }
 
-  let partialPath = "";
+  let partialPath: bstring = "";
   const setupFailure = new FixtureSuite<int>("shared setup failure", (context: TestContext): int => {
     partialPath = context.tempDir();
     throw errors.New("");

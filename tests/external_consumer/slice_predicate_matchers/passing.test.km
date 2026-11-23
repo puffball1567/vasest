@@ -8,6 +8,8 @@ class Record {
   constructor(value: int) { this.value = value; }
 }
 
+alias OptionalRecord = Record | null;
+
 function main(): void {
   const suite = new Suite("typed slice predicate matchers");
   suite.test("explicit native types and short circuit evaluation", (): void => {
@@ -38,9 +40,9 @@ function main(): void {
   });
   suite.test("application references and nested collection values", (): void => {
     const original = new Record(42);
-    const records: Record[] = [nil, original];
-    expectSlice<Record>(records).toSatisfyAny((value: Record): boolean => {
-      if (value == nil) { return false; }
+    const records: OptionalRecord[] = [null, original];
+    expectSlice<OptionalRecord>(records).toSatisfyAny((value: OptionalRecord): boolean => {
+      if (value == null) { return false; }
       value.value++;
       return value == original;
     });

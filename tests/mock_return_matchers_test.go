@@ -155,7 +155,7 @@ func TestMockReturnMatchersValidateArgumentsAndReadOneSnapshot(t *testing.T) {
 		t.Fatal("invalid arguments read source", reads)
 	}
 	for _, source := range []MockReturnSource[int]{nil, (*MockFn[int, int])(nil)} {
-		invalid := expectMockReturn[int](source)
+		invalid := NewMockReturnExpectation[int](source)
 		for _, attempt := range []func(){invalid.ToHaveReturned, invalid.Not.ToHaveReturned,
 			func() { invalid.ToHaveReturnedTimes(0) }, func() { invalid.Not.ToHaveReturnedTimes(1) },
 			func() { invalid.ToHaveReturnedWith(42) }, func() { invalid.Not.ToHaveReturnedWith(42) },
@@ -297,7 +297,7 @@ func TestMockReturnMatchersIdentifyActualCaller(t *testing.T) {
 		func() { record(); matcher.Not.ToHaveReturnedTimes(-1) },
 		func() { record(); matcher.ToHaveNthReturnedWith(0, 42) },
 		func() { record(); matcher.Not.ToHaveNthReturnedWith(0, 42) },
-		func() { record(); expectMockReturn[int](nil).ToHaveReturned() },
+		func() { record(); NewMockReturnExpectation[int](nil).ToHaveReturned() },
 		func() { record(); expectMockReturn[int]((*MockFn[int, int])(nil)).Not.ToHaveReturned() },
 	}
 	for _, check := range checks {

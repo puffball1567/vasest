@@ -6,7 +6,7 @@ function main(): void {
   const rows: int[] = [42, 42];
   suite.afterAll((): void => { fmt.Println("unreachable-name-panic-afterAll"); });
   suite.test("earlier", (): void => { fmt.Println("unreachable-name-panic-earlier"); });
-  suite.testEachIndexed<int>(rows, (value: int, index: int): string => {
+  suite.testEachIndexed<int>(rows, (value: int, index: int): bstring => {
     fmt.Printf("indexed-name-%d\n", index);
     if (index == 1) { reflect.ValueOf(index).Index(0); }
     return fmt.Sprint(index);

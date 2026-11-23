@@ -5,8 +5,8 @@ import go os from "os";
 function main(): void {
   runSuiteAndExit("temporary directory fixture", (suite: Suite): void => {
     suite.test("cleans up after success", (): void => {
-      let savedPath = "";
-      withTempDir((path: string): void => {
+      let savedPath: bstring = "";
+      withTempDir((path: bstring): void => {
         savedPath = path;
         const [info, statError] = os.Stat(path);
         expectNoError(statError);
@@ -16,9 +16,9 @@ function main(): void {
       expectTrue(os.IsNotExist(statError));
     });
     suite.test("cleans up after thrown error", (): void => {
-      let savedPath = "";
+      let savedPath: bstring = "";
       expectThrowsMessage((): void => {
-        withTempDir((path: string): void => {
+        withTempDir((path: bstring): void => {
           savedPath = path;
           throw errors.New("fixture failure");
         });

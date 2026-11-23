@@ -13,8 +13,8 @@ function main(): void {
   });
   suite.test("negated mismatch", (): void => { expectMap(values).not.toHaveEntrySatisfying("value", (value: int): boolean => { return value > 0; }); });
   suite.test("missing key", (): void => { expectMap(values).toHaveEntrySatisfying("absent", (value: int): boolean => { return true; }); });
-  suite.test("nil predicate", (): void => { expectMap<string, int>(values).toHaveEntrySatisfying("value", nil); });
-  suite.test("negated nil predicate", (): void => { expectMap<string, int>(values).not.toHaveEntrySatisfying("absent", nil); });
+  suite.test("nil predicate", (): void => { expectMap<string, int>(values).toHaveEntrySatisfying("value", null); });
+  suite.test("negated nil predicate", (): void => { expectMap<string, int>(values).not.toHaveEntrySatisfying("absent", null); });
   suite.test("thrown predicate", (): void => {
     expectMap<string, int>(values).not.toHaveEntrySatisfying("value", (value: int): boolean => { throw errors.New("predicate callback failed"); });
   });

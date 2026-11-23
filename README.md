@@ -4,23 +4,27 @@ Vasest is an early testing framework for Kinmokusei applications and libraries. 
 
 ## Requirements
 
-- Kinmokusei v0.4.3 or later
+- Kinmokusei v0.4.12 or later for this source tree
 - Go 1.23 or later
 
-## Install v0.1.0
+Go paths, error messages, and table naming callbacks use `bstring`. Suite and
+case registration checks names for valid UTF-8. Use `null` for omitted
+Kinmokusei callbacks.
 
-Download the archive for your operating system and architecture from the [v0.1.0 release](https://github.com/puffball1567/vasest/releases/tag/v0.1.0). Extract it and put the `vasest` executable on your `PATH`. Run `vasest --version` to verify the installation. Kinmokusei and Go are still required to compile and run your tests.
+## Install v0.1.1
+
+Download the archive for your operating system and architecture from the [v0.1.1 release](https://github.com/puffball1567/vasest/releases/tag/v0.1.1). Extract it and put the `vasest` executable on your `PATH`. Run `vasest --version` to verify the installation. The CLI uses Kinmokusei v0.4.12 or later and Go 1.23 or later to compile and run tests.
 
 In your Kinmokusei application project, add the matching library:
 
 ```sh
-keika deps add github.com/puffball1567/vasest@v0.1.0
+keika deps add github.com/puffball1567/vasest@v0.1.1
 ```
 
 Use `vasest` as its import alias. For a source installation, clone the release and build the runner:
 
 ```sh
-git clone --branch v0.1.0 https://github.com/puffball1567/vasest.git
+git clone --branch v0.1.1 https://github.com/puffball1567/vasest.git
 cd vasest
 mkdir -p build
 keika deps lock
@@ -117,7 +121,7 @@ const id = UserID(1152921504606846977);
 expectOrdered<UserID>(id).toBeGreaterThan(UserID(1152921504606846976));
 expectOrdered(id).toBeLessThanOrEqual(id);
 new OrderedExpectation<UserID>(id).not.toBeLessThan(id);
-expectOrdered<string>("金木犀").toBeGreaterThan("木");
+expectOrdered<bstring>("金木犀").toBeGreaterThan("木");
 ```
 
 Comparisons use native `<`, `<=`, `>`, and `>=` without numeric conversion. Large integers retain their precision; incompatible numeric widths and nominal types, and unordered types such as booleans or collections, are rejected by the compiler. Strings follow native byte-wise lexicographic ordering. Positive and negative zero compare equal, and infinities follow native ordering. Any comparison involving NaN returns false, so each negated ordering matcher passes for NaN; negation reverses the comparison result rather than replacing the operator with its opposite. Failures include both values, the requested relation, and the matcher call's location.
@@ -163,7 +167,7 @@ new SliceExpectation<UserID>(empty).not.toContain(id);
 expect<error>(nil).toBeNil();
 ```
 
-Give empty collections a typed binding before passing them to a matcher. Kinmokusei v0.4.3 does not always carry an explicit generic call's type into an empty array literal. Typed bindings, explicit type arguments, and the exported matcher constructors provide a verified path without depending on that inference. `StringExpectation` is also available for direct construction. The specialized string/slice matchers provide their text/collection operations; use the general `expect<T>` for ordered equality, identity, and nil checks.
+Give empty collections a typed binding before passing them to a matcher. Typed bindings give empty arrays an element type before generic inference. `StringExpectation` is also available for direct construction. The specialized string/slice matchers provide their text/collection operations; use the general `expect<T>` for ordered equality, identity, and nil checks.
 
 For literal string boundaries, use `toStartWith(prefix)` and `toEndWith(suffix)`, including `.not`:
 
@@ -401,8 +405,9 @@ Checks call the predicate once per visited entry and stop at the first decisive 
 Use `expectErrorValue(err)` for error-chain matchers. It accepts native Go errors and Kinmokusei classes implementing `error`; `new ErrorExpectation(err)` is also available:
 
 ```ts
-import { expectErrorValue, expectString } from "vasest";
+import { errorExtractor, expectErrorValue, expectString } from "vasest";
 import go fmt from "fmt";
+import go errors from "errors";
 import go os from "os";
 
 // Inside a test body:
@@ -412,27 +417,34 @@ expectErrorValue(wrapped).not.toBeNil();
 expectErrorValue(wrapped).toMatchCause(os.ErrNotExist);
 
 let found: *os.PathError = nil;
-expectErrorValue(wrapped).toMatchType<*os.PathError>(&found);
+expectErrorValue(wrapped).toMatchType<*os.PathError>(&found, (source, target) => errors.As(source, target));
 expectString(found.Path).toContain("missing");
 expectErrorValue(nil).not.toMatchType<*os.PathError>();
 ```
 
-`toMatchCause(target)` and `.not.toMatchCause(target)` use Go's `errors.Is`, retaining identity, wrapping, joined errors, and custom `Is` behavior. Equal messages do not imply equal causes. `toMatchType<T>(&target)` uses `errors.As`, assigning the extracted value to the typed destination. The type can be inferred from the destination or supplied explicitly. As with `expectErrorAs`, a destination must be a non-nil pointer to an error type or interface; invalid destinations fail before matching, including when the error is nil. Ordinary mismatches preserve the destination; custom `As` methods retain their native ability to change it even when returning false.
+`toMatchCause(target)` and `.not.toMatchCause(target)` use Go's `errors.Is`, retaining identity, wrapping, joined errors, and custom `Is` behavior. Equal messages do not imply equal causes. `toMatchType<T>(&target, matchInto)` uses the supplied typed extraction callback, assigning the extracted value to the typed destination. The type can be inferred from the destination or supplied explicitly. As with `expectErrorAs`, a destination must be a non-nil pointer to an error type or interface; invalid destinations fail before matching, including when the error is nil. Ordinary mismatches preserve the destination; custom `As` methods retain their native ability to change it even when returning false.
 
 The negated `.not.toMatchType<T>()` requires an explicit type and checks that no assignable error exists using its own destination, leaving caller variables untouched. It supports error types and interfaces, including non-error interfaces such as `fmt.Stringer`; invalid types fail even when the error is nil. Both forms follow custom `As` behavior and treat matching typed nil errors as matches.
 
-Use `toMatchTypeSatisfying<T>(predicate)` to check the extracted type and its contents together without declaring a destination:
+Use `toMatchTypeSatisfying<T>(predicate, extract)` to check the first extracted value. Build a reusable extractor with `errorExtractor<T>(allocate, matchInto)`. Kinmokusei checks each `errors.As` call where the concrete destination type is known. The extractor allocates a fresh destination per check and calls the predicate only on a match.
 
 ```ts
 // Inside a test body, using the imports and wrapped error above:
+const extractPathError = errorExtractor<*os.PathError>(
+  (): **os.PathError => {
+    let selected: *os.PathError = nil;
+    return &selected;
+  },
+  (source, target) => errors.As(source, target),
+);
 const isMissingPath: (value: *os.PathError) => boolean = (value: *os.PathError): boolean => {
   return value != nil && value.Path == "missing";
 };
-expectErrorValue(wrapped).toMatchTypeSatisfying<*os.PathError>(isMissingPath);
-expectErrorValue(wrapped).toMatchTypeSatisfying(isMissingPath);
+expectErrorValue(wrapped).toMatchTypeSatisfying<*os.PathError>(isMissingPath, extractPathError);
+expectErrorValue(wrapped).toMatchTypeSatisfying(isMissingPath, extractPathError);
 expectErrorValue(wrapped).not.toMatchTypeSatisfying<*os.PathError>((value: *os.PathError): boolean => {
   return value != nil && value.Op == "write";
-});
+}, extractPathError);
 ```
 
 The predicate receives the first value selected by native `errors.As`, exactly once per check. A false predicate does not search for another error of the same type. Missing types fail the positive matcher and pass `.not` without invoking the predicate; negation reverses the combined type-and-predicate result. Error types and interfaces, including non-error interfaces, retain native reference and value semantics, and matching typed nil values reach the predicate. Explicit type arguments, typed callback bindings and direct error matcher constructors are supported. Nil predicates and invalid types fail before matching, even for nil errors and negated checks. Mismatch diagnostics do not format the original error. Predicate and custom `As` throws, skips, attached locations and native panics propagate unchanged with normal cleanup; assertion failures identify the fluent call.
@@ -444,6 +456,7 @@ Use `expectFunction(body)` or `new FunctionExpectation(body)` to assert Kinmokus
 ```ts
 import { FunctionExpectation, expectErrorValue, expectFunction } from "vasest";
 import go fmt from "fmt";
+import go errors from "errors";
 import go os from "os";
 
 // Inside a test body:
@@ -455,12 +468,12 @@ expectFunction(load).toThrowMessage("missing");
 expectFunction(load).toThrowCause(os.ErrNotExist);
 
 let found: *os.PathError = nil;
-new FunctionExpectation(load).toThrowType<*os.PathError>(&found);
+new FunctionExpectation(load).toThrowType<*os.PathError>(&found, (source, target) => errors.As(source, target));
 expectFunction(load).not.toThrowType<*os.LinkError>();
 expectFunction((): void => {}).not.toThrow();
 ```
 
-`toThrow()` returns the original thrown error. `toThrowMessage(fragment)` checks a non-empty message substring. `toThrowCause(target)` follows `errors.Is`, and `toThrowType<T>(&target)` extracts through `errors.As`, with inferred or explicit destination types. All positive forms require a throw. `.not.toThrow()` requires normal return; `.not.toThrowMessage(fragment)`, `.not.toThrowCause(target)`, and `.not.toThrowType<T>()` permit normal return or a throw that does not match the specified condition. The negated type check uses a private destination.
+`toThrow()` returns the original thrown error. `toThrowMessage(fragment)` checks a non-empty message substring. `toThrowCause(target)` follows `errors.Is`, and `toThrowType<T>(&target, matchInto)` extracts through a typed callback, with inferred or explicit destination types. All positive forms require a throw. `.not.toThrow()` requires normal return; `.not.toThrowMessage(fragment)`, `.not.toThrowCause(target)`, and `.not.toThrowType<T>()` permit normal return or a throw that does not match the specified condition. The negated type check uses a private destination.
 
 Use `toThrowSatisfying(predicate)` for an application-specific condition on the thrown error. The predicate has type `(exception: error) => boolean` and receives the original native error exactly once when the body throws. A typed binding and direct `FunctionExpectation` or `NegatedFunctionExpectation` constructors are supported:
 
@@ -485,23 +498,31 @@ The positive matcher requires a throw and a true predicate result. `.not.toThrow
 
 Predicate throws, attached locations, runtime skips and native panics propagate unchanged. A body runtime skip is a thrown outcome, following the other function matchers; a predicate runtime skip skips the enclosing test. Matcher mismatches and validation failures retain the fluent call's location, while ordinary predicate errors receive no invented position. Normal suite cleanup, reporters, bail and failed-case reruns apply.
 
-Use `toThrowTypeSatisfying<T>(predicate)` to inspect an extracted error's contents in the same throw assertion:
+Use `toThrowTypeSatisfying<T>(predicate, extract)` to inspect an extracted error's contents in the same throw assertion:
 
 ```ts
-import { expectFunction } from "vasest";
+import { errorExtractor, expectFunction } from "vasest";
+import go errors from "errors";
 import go os from "os";
 
 // Inside a test body:
 const original = os.PathError { Op: "open", Path: "missing", Err: os.ErrNotExist };
 const load: () => void = (): void => { throw &original; };
+const extractPathError = errorExtractor<*os.PathError>(
+  (): **os.PathError => {
+    let selected: *os.PathError = nil;
+    return &selected;
+  },
+  (source, target) => errors.As(source, target),
+);
 const isMissingPath: (value: *os.PathError) => boolean = (value: *os.PathError): boolean => {
   return value != nil && value.Path == "missing";
 };
-expectFunction(load).toThrowTypeSatisfying<*os.PathError>(isMissingPath);
-expectFunction(load).toThrowTypeSatisfying(isMissingPath);
+expectFunction(load).toThrowTypeSatisfying<*os.PathError>(isMissingPath, extractPathError);
+expectFunction(load).toThrowTypeSatisfying(isMissingPath, extractPathError);
 expectFunction(load).not.toThrowTypeSatisfying<*os.PathError>((value: *os.PathError): boolean => {
   return value != nil && value.Op == "write";
-});
+}, extractPathError);
 ```
 
 Each check executes the body once and uses native `errors.As` to select the first assignable value. The predicate runs once when extraction succeeds; a false predicate does not continue searching the chain. The positive matcher requires a throw, a matching type and a true predicate. `.not` permits normal return, a missing type, or a false predicate; normal return and missing types skip the predicate. Error types and interfaces, including non-error interfaces and matching typed nil values, preserve native value and reference semantics. A nil thrown payload is a throw but has no assignable error value. Explicit type arguments, inferred typed callback bindings and direct function matcher constructors are available. Invalid types, nil predicates and nil bodies fail before executing callbacks, even when negated. Diagnostics do not format the original error. Custom `As` and predicate throws, skips, locations and native panics propagate unchanged with normal cleanup; body skip signals remain thrown outcomes.
@@ -524,18 +545,19 @@ For JSON-serializable values, use `expectJSONSnapshot("name", value)`. It writes
 
 `expectErrorIs(actual, target)` verifies an error's cause with Go's `errors.Is` rules, following wrapping, joined errors, and custom `Is` methods. Errors with identical messages can still be different causes. `expectErrorIs(nil, nil)` succeeds; one nil argument and one non-nil argument fail.
 
-`expectErrorAs(actual, &target)` finds an error assignable to the target's type using Go's `errors.As` rules and assigns it to the target. This supports wrapped and joined errors, custom `As` methods, native Go error types, and application classes implementing `error`:
+`expectErrorAs(actual, &target, matchInto)` finds an error assignable to the target's type using Go's `errors.As` rules and assigns it to the target. This supports wrapped and joined errors, custom `As` methods, native Go error types, and application classes implementing `error`:
 
 ```ts
 import { expectErrorAs, expectErrorIs, expectEqual } from "vasest";
 import go fmt from "fmt";
+import go errors from "errors";
 import go os from "os";
 
 const [contents, readError] = os.ReadFile("missing-file");
 const wrapped = fmt.Errorf("load configuration: %w", readError);
 expectErrorIs(wrapped, os.ErrNotExist);
 let pathError: *os.PathError = nil;
-expectErrorAs(wrapped, &pathError);
+expectErrorAs(wrapped, &pathError, (source, target) => errors.As(source, target));
 expectEqual(pathError.Path, "missing-file");
 ```
 
@@ -627,7 +649,7 @@ Inference is also available with `waitForValue(read, ready, timeout, interval)`.
 
 Each retry performs a fresh read. A timeout preserves the last callback error as its cause and retains its attached failure location, falling back to the `waitForValue` call site for an unlocated error. A false predicate reports `waitForValue predicate returned false` at that call site. Both helpers stop immediately for direct or ordinarily wrapped runtime skips; joined errors remain failures. Read/predicate callbacks are allowed to finish and are not interrupted by these helpers. Registered cleanup, reporters, bail and failed-case history follow the normal suite rules.
 
-Use `suite.testEach(values, nameOf, body)` for a test matrix. For example, with `import go fmt from "fmt";`, `suite.testEach([0, 1, 2], (value: int): string => { return fmt.Sprintf("value %d", value); }, (value: int): void => { expectTrue(value >= 0); });` registers three independent tests. Each row has its own name, hooks, result, and `--filter` selection. Empty tables, blank or duplicate names, and nil callbacks are rejected before any row is registered.
+Use `suite.testEach(values, nameOf, body)` for a test matrix. For example, with `import go fmt from "fmt";`, `suite.testEach([0, 1, 2], (value: int): bstring => { return fmt.Sprintf("value %d", value); }, (value: int): void => { expectTrue(value >= 0); });` registers three independent tests. Each row has its own name, hooks, result, and `--filter` selection. Empty tables, blank or duplicate names, and nil callbacks are rejected before any row is registered.
 
 Use `suite.testEachIndexed<T>(values, nameOf, body)` when repeated values need distinct names or a check needs the original row number. Both callbacks receive `(value, index)`, where `index` is a zero-based `int` fixed during registration. Filtering, shuffling and failed-case reruns preserve that original index:
 
@@ -640,7 +662,7 @@ type UserID = distinct int64;
 function main(): void {
   runSuiteAndExit("repeated users", (suite: Suite): void => {
     const rows: UserID[] = [UserID(42), UserID(42)];
-    const nameOf: (value: UserID, index: int) => string = (value: UserID, index: int): string => {
+    const nameOf: (value: UserID, index: int) => bstring = (value: UserID, index: int): bstring => {
       return fmt.Sprintf("user row %d", index);
     };
     suite.testEachIndexed<UserID>(rows, nameOf, (value: UserID, index: int): void => {
@@ -661,7 +683,7 @@ import go os from "os";
 
 function main(): void {
   runSuiteAndExit("input modes", (suite: Suite): void => {
-    suite.testEachWithContext(["small", "large"], (mode: string): string => {
+    suite.testEachWithContext(["small", "large"], (mode: string): bstring => {
       return mode;
     }, (mode: string, context: TestContext): void => {
       const path = context.tempDir();
@@ -682,7 +704,7 @@ For reusable setup that returns a typed value, use `suite.testWithFixture(name, 
 import { Suite, TestContext, expectEqual, runSuiteAndExit } from "vasest";
 import go os from "os";
 
-function dataDirectory(context: TestContext): string {
+function dataDirectory(context: TestContext): bstring {
   const path = context.tempDir();
   context.setEnv("VASEST_DATA_DIR", path);
   return path;
@@ -710,7 +732,7 @@ import { FixtureSuite, TestContext, expectNoError } from "vasest";
 import go os from "os";
 
 function main(): void {
-  const suite = new FixtureSuite<string>("shared data", (context: TestContext): string => {
+  const suite = new FixtureSuite<bstring>("shared data", (context: TestContext): bstring => {
     return context.tempDir();
   });
   suite.test("uses the shared directory", (path: string, context: TestContext): void => {
@@ -948,11 +970,12 @@ expectMockOutcome(notify).not.toHaveLastThrownMessage("failed");
 
 Normal void completion has status `return`; a function returning an error value also completes normally. A Kinmokusei throw has status `throw`, including a nil error payload. Pending calls and native panics are counted in neither category. Message matchers require a throwing selected invocation and a non-empty substring of its native error message. A nil error payload has an empty message. Nth and last refer to invocation order, including non-throwing calls, even when calls finish in another order. Missing, pending, normally completed, or panicking selected invocations fail the positive message matcher and pass its negated form. Negative counts, indices below 1, empty fragments, and nil or typed nil sources fail in both forms.
 
-Use `toHaveNthThrownCause(index, cause)` and `toHaveLastThrownCause(cause)` to match native error chains with `errors.Is`. Type extraction uses `toHaveNthThrownType<T>(index, &found)` and `toHaveLastThrownType<T>(&found)` with `errors.As`. The destination can infer `T`, or you can state it explicitly:
+Use `toHaveNthThrownCause(index, cause)` and `toHaveLastThrownCause(cause)` to match native error chains with `errors.Is`. Type extraction uses `toHaveNthThrownType<T>(index, &found, matchInto)` and `toHaveLastThrownType<T>(&found, matchInto)`. The destination can infer `T`, or you can state it explicitly:
 
 ```ts
 import { MockAction, expectMockOutcome, expectFunction } from "vasest";
 import go fmt from "fmt";
+import go errors from "errors";
 import go os from "os";
 
 // Inside a test body:
@@ -963,8 +986,8 @@ const load = new MockAction<string>((path: string): void => {
 expectFunction((): void => { load.invoke("missing"); }).toThrow();
 expectMockOutcome(load).toHaveNthThrownCause(1, os.ErrNotExist);
 let found: *os.PathError = nil;
-expectMockOutcome(load).toHaveLastThrownType<*os.PathError>(&found);
-expectMockOutcome(load).toHaveNthThrownType(1, &found);
+expectMockOutcome(load).toHaveLastThrownType<*os.PathError>(&found, (source, target) => errors.As(source, target));
+expectMockOutcome(load).toHaveNthThrownType(1, &found, (source, target) => errors.As(source, target));
 expectMockOutcome(load).not.toHaveLastThrownCause(os.ErrPermission);
 ```
 
@@ -997,24 +1020,32 @@ The any-throw matcher visits throwing invocations in call order and stops at the
 
 Nil predicates and indices below 1 fail before reading history, even when negated. Each check uses one outcome snapshot, so callback changes to history affect subsequent checks. Callback and source throws, runtime skips, attached locations and native panics propagate unchanged with normal cleanup. Mismatches retain the fluent caller's location; the any-throw mismatch reports how many throws were checked.
 
-Use `toHaveThrownTypeSatisfying<T>(predicate)`, `toHaveNthThrownTypeSatisfying<T>(index, predicate)` or `toHaveLastThrownTypeSatisfying<T>(predicate)` to check a mock's extracted error type and contents together. Each supports `.not`, explicit type arguments, inference from a typed callback binding and direct outcome matcher constructors:
+Use `toHaveThrownTypeSatisfying<T>(predicate, extract)`, `toHaveNthThrownTypeSatisfying<T>(index, predicate, extract)` or `toHaveLastThrownTypeSatisfying<T>(predicate, extract)` to check a mock's extracted error type and contents together. Each supports `.not`, explicit type arguments, inference from a typed callback binding and direct outcome matcher constructors:
 
 ```ts
-import { MockAction, MockOutcomeExpectation, expectMockOutcome, expectFunction } from "vasest";
+import { errorExtractor, MockAction, MockOutcomeExpectation, expectMockOutcome, expectFunction } from "vasest";
+import go errors from "errors";
 import go os from "os";
 
 // Inside a test body:
 const original = os.PathError { Op: "open", Path: "missing", Err: os.ErrNotExist };
 const load = new MockAction<string>((path: string): void => { throw &original; });
 expectFunction((): void => { load.invoke("missing"); }).toThrow();
+const extractPathError = errorExtractor<*os.PathError>(
+  (): **os.PathError => {
+    let selected: *os.PathError = nil;
+    return &selected;
+  },
+  (source, target) => errors.As(source, target),
+);
 const isMissingPath: (value: *os.PathError) => boolean = (value: *os.PathError): boolean => {
   return value != nil && value.Path == "missing";
 };
-expectMockOutcome(load).toHaveThrownTypeSatisfying<*os.PathError>(isMissingPath);
-new MockOutcomeExpectation(load).toHaveNthThrownTypeSatisfying(1, isMissingPath);
+expectMockOutcome(load).toHaveThrownTypeSatisfying<*os.PathError>(isMissingPath, extractPathError);
+new MockOutcomeExpectation(load).toHaveNthThrownTypeSatisfying(1, isMissingPath, extractPathError);
 expectMockOutcome(load).not.toHaveLastThrownTypeSatisfying<*os.PathError>((value: *os.PathError): boolean => {
   return value != nil && value.Op == "write";
-});
+}, extractPathError);
 ```
 
 Only throwing invocations undergo native `errors.As` extraction, each with a fresh private destination. The predicate receives the first assignable value once when extraction succeeds. It can inspect error types or interfaces, including non-error interfaces and matching typed nil values, without losing native fields or references. A nil throw has no assignable error value. The any matcher visits throws in invocation order and stops at the first successful type-and-predicate match; a false predicate continues to the next invocation, without searching for another matching type within the same error chain. Its negation requires no matching throw. Nth and last select invocations, including non-throwing calls, and negate the combined type-and-predicate condition. Missing, returned, pending or panicking selections pass negation without extraction or callback execution.
@@ -1033,10 +1064,10 @@ Use `skipEach<T>(values, nameOf, body)` to disable a whole typed table, or `todo
 // During suite registration, with import go fmt from "fmt";
 const rows: int64[] = [int64(42), int64(42)];
 suite.skipEachIndexed<int64>(rows,
-  (value: int64, index: int): string => { return fmt.Sprintf("disabled %d", index); },
+  (value: int64, index: int): bstring => { return fmt.Sprintf("disabled %d", index); },
   (value: int64, index: int): void => { expect(value).toEqual(int64(42)); });
 suite.todoEachIndexed<int64>(rows,
-  (value: int64, index: int): string => { return fmt.Sprintf("planned %d", index); });
+  (value: int64, index: int): bstring => { return fmt.Sprintf("planned %d", index); });
 ```
 
 All four methods also work on `FixtureSuite<T>`, with independently typed rows. Its skipped body accepts `(row, fixture, context)` or `(row, index, fixture, context)`, matching its runnable table methods. Explicit generic arguments and typed callbacks keep inference optional; incompatible row, index, fixture and numeric types are rejected by the compiler.
@@ -1238,7 +1269,7 @@ An abnormal process exit, timeout or invalid suite report adds a `<file>` failur
 
 JSON suite events include these failure entries. Text output adds phase labels for hook failures, multiple failures, and empty errors; a single body error keeps its concise output. JUnit emits one failure element per failed case, retaining the combined message attribute and placing each phase and original message in its content. Empty errors display as `(empty error message)` in text and JUnit, while their JSON messages remain empty. Reports from earlier versions that omit failure entries are still accepted; unknown phases and failure entries on non-failed cases are rejected.
 
-Assertion value diagnostics retain native `%#v` formatting for ordinary values. Cyclic graphs are summarized with their native type and `<cyclic value>`; deeply nested or large graphs use `<diagnostic traversal limit>`. This applies to general assertions, slice/map values and mock arguments/returns, so formatting a failure can complete and normal cleanup, reporting and later tests can run. Shared references alone are not cycles. Explicit native `GoString` and `Format` methods retain their formatting behavior. These summaries affect diagnostics only; comparison rules, native types and the original values remain unchanged.
+Assertion diagnostics use native `%#v` formatting when the argument type and size give the formatter a bounded traversal. Other values show their native type followed by `<possible cyclic value or diagnostic traversal limit>`. The summary can also appear for acyclic values whose shape cannot be bounded, such as a generic value containing a dynamic interface. Explicit `GoString` and `Format` methods on supported argument types retain their Go behavior. Matchers still compare the original values using their documented equality rules.
 
 `TestLocation { file, line, source }` records an assertion's actual call site. `source: "go"` identifies a Go runtime position; with Kinmokusei 0.4.3 this normally points into `generated.go`. A compiler-provided line directive referring to `.km` produces `source: "kinmokusei"`. Positions are retained through standard wrapped/joined errors and in setup, fixture, hook, and cleanup failures. `waitFor` keeps its last failed assertion's location; if the last error has no location, it reports the `waitFor` call site. Ordinary thrown errors have an empty location unless annotated. An unavailable position is `{ file: "", line: 0, source: "" }`, and earlier reports that omit `location` remain accepted.
 

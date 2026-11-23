@@ -17,7 +17,7 @@ function main(): void {
   suite.test("literal regex characters", (): void => { expectString("abbb").toStartWith("a[b]+"); });
   suite.test("quoted byte diagnostics", (): void => {
     const values: uint8[] = [uint8(255), uint8(0), uint8(10)];
-    expectString(string(values)).toEndWith("text\n");
+    expectString(bstring(values)).toEndWith("text\n");
   });
   suite.test("explicit location", (): void => {
     withTestLocation("domain-check.km", 42, (): void => { expectString("value").toStartWith("prefix"); });

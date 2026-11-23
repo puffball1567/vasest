@@ -12,21 +12,21 @@ func checkMockTypePredicate[T any](matcher *MockOutcomeExpectation, kind string,
 	switch kind {
 	case "any":
 		if negated {
-			NegatedMockOutcomeExpectationToHaveThrownTypeSatisfying(matcher.Not, predicate)
+			NegatedMockOutcomeExpectationToHaveThrownTypeSatisfying(matcher.Not, predicate, testErrorExtractor)
 		} else {
-			MockOutcomeExpectationToHaveThrownTypeSatisfying(matcher, predicate)
+			MockOutcomeExpectationToHaveThrownTypeSatisfying(matcher, predicate, testErrorExtractor)
 		}
 	case "nth":
 		if negated {
-			NegatedMockOutcomeExpectationToHaveNthThrownTypeSatisfying(matcher.Not, 1, predicate)
+			NegatedMockOutcomeExpectationToHaveNthThrownTypeSatisfying(matcher.Not, 1, predicate, testErrorExtractor)
 		} else {
-			MockOutcomeExpectationToHaveNthThrownTypeSatisfying(matcher, 1, predicate)
+			MockOutcomeExpectationToHaveNthThrownTypeSatisfying(matcher, 1, predicate, testErrorExtractor)
 		}
 	case "last":
 		if negated {
-			NegatedMockOutcomeExpectationToHaveLastThrownTypeSatisfying(matcher.Not, predicate)
+			NegatedMockOutcomeExpectationToHaveLastThrownTypeSatisfying(matcher.Not, predicate, testErrorExtractor)
 		} else {
-			MockOutcomeExpectationToHaveLastThrownTypeSatisfying(matcher, predicate)
+			MockOutcomeExpectationToHaveLastThrownTypeSatisfying(matcher, predicate, testErrorExtractor)
 		}
 	}
 }
@@ -77,13 +77,13 @@ func TestMockTypePredicateSnapshotShortCircuitAndFreshExtraction(t *testing.T) {
 	results := []MockOutcomeResult{{Status: "throw", Exception: errors.New("other type")}, {Status: "return", Exception: third}, {Status: "throw", Exception: first}, {Status: "throw", Exception: second}, {Status: "throw", Exception: third}}
 	matcher := expectMockOutcome(&matcherOutcomeSource{func() []MockOutcomeResult { reads++; return results }})
 	visited := []*predicateDomainError{}
-	MockOutcomeExpectationToHaveThrownTypeSatisfying(matcher, func(value *predicateDomainError) bool { visited = append(visited, value); return value == second })
+	MockOutcomeExpectationToHaveThrownTypeSatisfying(matcher, func(value *predicateDomainError) bool { visited = append(visited, value); return value == second }, testErrorExtractor)
 	if reads != 1 || len(visited) != 2 || visited[0] != first || visited[1] != second {
 		t.Fatal(reads, visited)
 	}
-	NegatedMockOutcomeExpectationToHaveThrownTypeSatisfying(matcher.Not, func(value *predicateDomainError) bool { return value.Code > 10 })
-	MockOutcomeExpectationToHaveNthThrownTypeSatisfying(matcher, 4, func(value *predicateDomainError) bool { return value == second })
-	MockOutcomeExpectationToHaveLastThrownTypeSatisfying(matcher, func(value *predicateDomainError) bool { return value == third })
+	NegatedMockOutcomeExpectationToHaveThrownTypeSatisfying(matcher.Not, func(value *predicateDomainError) bool { return value.Code > 10 }, testErrorExtractor)
+	MockOutcomeExpectationToHaveNthThrownTypeSatisfying(matcher, 4, func(value *predicateDomainError) bool { return value == second }, testErrorExtractor)
+	MockOutcomeExpectationToHaveLastThrownTypeSatisfying(matcher, func(value *predicateDomainError) bool { return value == third }, testErrorExtractor)
 	// As receives a new zero destination for every visited throw and every check.
 	seen := 0
 	results = []MockOutcomeResult{
@@ -95,16 +95,16 @@ func TestMockTypePredicateSnapshotShortCircuitAndFreshExtraction(t *testing.T) {
 			return true
 		}}},
 	}
-	MockOutcomeExpectationToHaveThrownTypeSatisfying(matcher, func(value *predicateDomainError) bool { seen++; return value == nil })
+	MockOutcomeExpectationToHaveThrownTypeSatisfying(matcher, func(value *predicateDomainError) bool { seen++; return value == nil }, testErrorExtractor)
 	if seen != 2 {
 		t.Fatal(seen)
 	}
 	results = []MockOutcomeResult{{Status: "throw", Exception: predicateAsError{as: func(target any) bool { *target.(*fmt.Stringer) = nil; return true }}}}
-	MockOutcomeExpectationToHaveLastThrownTypeSatisfying[fmt.Stringer](matcher, func(value fmt.Stringer) bool { return value == nil })
+	MockOutcomeExpectationToHaveLastThrownTypeSatisfying[fmt.Stringer](matcher, func(value fmt.Stringer) bool { return value == nil }, testErrorExtractor[fmt.Stringer])
 	results = []MockOutcomeResult{{Status: "throw", Exception: predicateAsError{as: func(target any) bool { *target.(**predicateDomainError) = first; return false }}}}
-	NegatedMockOutcomeExpectationToHaveThrownTypeSatisfying(matcher.Not, func(*predicateDomainError) bool { t.Fatal("false As invoked predicate"); return true })
+	NegatedMockOutcomeExpectationToHaveThrownTypeSatisfying(matcher.Not, func(*predicateDomainError) bool { t.Fatal("false As invoked predicate"); return true }, testErrorExtractor)
 	results = []MockOutcomeResult{{Status: "throw", Exception: errors.Join(first, second)}}
-	NegatedMockOutcomeExpectationToHaveLastThrownTypeSatisfying(matcher.Not, func(value *predicateDomainError) bool { return value == second })
+	NegatedMockOutcomeExpectationToHaveLastThrownTypeSatisfying(matcher.Not, func(value *predicateDomainError) bool { return value == second }, testErrorExtractor)
 }
 
 func TestMockTypePredicateLiveMockHistoryQueuesAndReentrantChecks(t *testing.T) {
@@ -113,14 +113,14 @@ func TestMockTypePredicateLiveMockHistoryQueuesAndReentrantChecks(t *testing.T) 
 	mock := NewMockAction[int](func(int) { invoked++ })
 	mock.ImplementOnce(func(int) { panic(__kinmokuseiThrown{err: first}) })
 	matcher := expectMockOutcome(mock)
-	NegatedMockOutcomeExpectationToHaveThrownTypeSatisfying(matcher.Not, func(*predicateDomainError) bool { t.Fatal("empty history predicate"); return true })
+	NegatedMockOutcomeExpectationToHaveThrownTypeSatisfying(matcher.Not, func(*predicateDomainError) bool { t.Fatal("empty history predicate"); return true }, testErrorExtractor)
 	if invoked != 0 {
 		t.Fatal("matcher invoked mock")
 	}
 	if expectThrows(func() { mock.Invoke(1) }) != first {
 		t.Fatal("queued outcome replaced")
 	}
-	MockOutcomeExpectationToHaveLastThrownTypeSatisfying(matcher, func(value *predicateDomainError) bool { value.Code++; return value == first })
+	MockOutcomeExpectationToHaveLastThrownTypeSatisfying(matcher, func(value *predicateDomainError) bool { value.Code++; return value == first }, testErrorExtractor)
 	mock.ImplementOnce(func(int) { panic(__kinmokuseiThrown{err: second}) })
 	expectThrows(func() { mock.Invoke(2) })
 	visited := []*predicateDomainError{}
@@ -129,24 +129,24 @@ func TestMockTypePredicateLiveMockHistoryQueuesAndReentrantChecks(t *testing.T) 
 		mock.ClearCalls()
 		mock.Invoke(3)
 		return false
-	})
+	}, testErrorExtractor)
 	if len(visited) != 2 || visited[0] != first || visited[1] != second || first.Code != 1<<60+2 || len(mock.Outcomes()) != 1 || invoked != 2 {
 		t.Fatal("snapshot or queue changed", len(visited), len(mock.Outcomes()), invoked)
 	}
-	NegatedMockOutcomeExpectationToHaveLastThrownTypeSatisfying(matcher.Not, func(*predicateDomainError) bool { t.Fatal("normal return callback"); return true })
+	NegatedMockOutcomeExpectationToHaveLastThrownTypeSatisfying(matcher.Not, func(*predicateDomainError) bool { t.Fatal("normal return callback"); return true }, testErrorExtractor)
 	returned := NewMockFn[int, error](func(int) error { return first })
 	returned.Invoke(1)
-	NegatedMockOutcomeExpectationToHaveThrownTypeSatisfying(expectMockOutcome(returned).Not, func(*predicateDomainError) bool { t.Fatal("returned error treated as throw"); return true })
+	NegatedMockOutcomeExpectationToHaveThrownTypeSatisfying(expectMockOutcome(returned).Not, func(*predicateDomainError) bool { t.Fatal("returned error treated as throw"); return true }, testErrorExtractor)
 	returned.ImplementOnce(func(int) error { panic(__kinmokuseiThrown{err: (*predicateDomainError)(nil)}) })
 	expectThrows(func() { returned.Invoke(2) })
-	MockOutcomeExpectationToHaveLastThrownTypeSatisfying(expectMockOutcome(returned), func(value *predicateDomainError) bool { return value == nil })
+	MockOutcomeExpectationToHaveLastThrownTypeSatisfying(expectMockOutcome(returned), func(value *predicateDomainError) bool { return value == nil }, testErrorExtractor)
 	returned.ImplementOnce(func(int) error { panic(__kinmokuseiThrown{err: nil}) })
 	expectThrows(func() { returned.Invoke(3) })
-	NegatedMockOutcomeExpectationToHaveLastThrownTypeSatisfying[error](expectMockOutcome(returned).Not, func(error) bool { t.Fatal("nil throw matched error type"); return true })
+	NegatedMockOutcomeExpectationToHaveLastThrownTypeSatisfying[error](expectMockOutcome(returned).Not, func(error) bool { t.Fatal("nil throw matched error type"); return true }, testErrorExtractor[error])
 	values := assertionSliceError{1, 2}
 	mock.ImplementOnce(func(int) { panic(__kinmokuseiThrown{err: values}) })
 	expectThrows(func() { mock.Invoke(4) })
-	MockOutcomeExpectationToHaveLastThrownTypeSatisfying(matcher, func(value assertionSliceError) bool { value[0] = 7; return len(value) == 2 })
+	MockOutcomeExpectationToHaveLastThrownTypeSatisfying(matcher, func(value assertionSliceError) bool { value[0] = 7; return len(value) == 2 }, testErrorExtractor)
 	if values[0] != 7 || first.Reads != 0 || second.Reads != 0 {
 		t.Fatal(values)
 	}
@@ -162,8 +162,12 @@ func TestMockTypePredicateValidationAndMissingCalls(t *testing.T) {
 		}
 	}
 	predicate := func(error) bool { calls++; return true }
-	assertThrownMessage(t, "index must be at least 1", func() { MockOutcomeExpectationToHaveNthThrownTypeSatisfying[error](matcher, 0, predicate) })
-	assertThrownMessage(t, "index must be at least 1", func() { NegatedMockOutcomeExpectationToHaveNthThrownTypeSatisfying[error](matcher.Not, -1, predicate) })
+	assertThrownMessage(t, "index must be at least 1", func() {
+		MockOutcomeExpectationToHaveNthThrownTypeSatisfying[error](matcher, 0, predicate, testErrorExtractor[error])
+	})
+	assertThrownMessage(t, "index must be at least 1", func() {
+		NegatedMockOutcomeExpectationToHaveNthThrownTypeSatisfying[error](matcher.Not, -1, predicate, testErrorExtractor[error])
+	})
 	if reads != 0 || calls != 0 {
 		t.Fatal("invalid arguments read source", reads, calls)
 	}
@@ -194,39 +198,39 @@ func TestMockTypePredicateCallerLocations(t *testing.T) {
 	checks := []func(){
 		func() {
 			record()
-			MockOutcomeExpectationToHaveThrownTypeSatisfying[error](matcher, no)
+			MockOutcomeExpectationToHaveThrownTypeSatisfying[error](matcher, no, testErrorExtractor[error])
 		},
 		func() {
 			record()
-			NegatedMockOutcomeExpectationToHaveThrownTypeSatisfying[error](matcher.Not, yes)
+			NegatedMockOutcomeExpectationToHaveThrownTypeSatisfying[error](matcher.Not, yes, testErrorExtractor[error])
 		},
 		func() {
 			record()
-			MockOutcomeExpectationToHaveNthThrownTypeSatisfying[error](matcher, 1, no)
+			MockOutcomeExpectationToHaveNthThrownTypeSatisfying[error](matcher, 1, no, testErrorExtractor[error])
 		},
 		func() {
 			record()
-			NegatedMockOutcomeExpectationToHaveNthThrownTypeSatisfying[error](matcher.Not, 1, yes)
+			NegatedMockOutcomeExpectationToHaveNthThrownTypeSatisfying[error](matcher.Not, 1, yes, testErrorExtractor[error])
 		},
 		func() {
 			record()
-			MockOutcomeExpectationToHaveLastThrownTypeSatisfying[error](matcher, no)
+			MockOutcomeExpectationToHaveLastThrownTypeSatisfying[error](matcher, no, testErrorExtractor[error])
 		},
 		func() {
 			record()
-			NegatedMockOutcomeExpectationToHaveLastThrownTypeSatisfying[error](matcher.Not, yes)
+			NegatedMockOutcomeExpectationToHaveLastThrownTypeSatisfying[error](matcher.Not, yes, testErrorExtractor[error])
 		},
 		func() {
 			record()
-			MockOutcomeExpectationToHaveThrownTypeSatisfying[error](matcher, nil)
+			MockOutcomeExpectationToHaveThrownTypeSatisfying[error](matcher, nil, testErrorExtractor[error])
 		},
 		func() {
 			record()
-			NegatedMockOutcomeExpectationToHaveNthThrownTypeSatisfying[error](matcher.Not, 0, yes)
+			NegatedMockOutcomeExpectationToHaveNthThrownTypeSatisfying[error](matcher.Not, 0, yes, testErrorExtractor[error])
 		},
 		func() {
 			record()
-			MockOutcomeExpectationToHaveLastThrownTypeSatisfying(matcher, func(int) bool { return true })
+			MockOutcomeExpectationToHaveLastThrownTypeSatisfying(matcher, func(int) bool { return true }, testErrorExtractor)
 		},
 	}
 	for _, check := range checks {
@@ -320,11 +324,11 @@ func TestMockTypePredicatePendingAndCompletionOrder(t *testing.T) {
 	go func() { defer close(done); expectThrows(func() { mock.Invoke(1) }) }()
 	<-entered
 	matcher := expectMockOutcome(mock)
-	NegatedMockOutcomeExpectationToHaveLastThrownTypeSatisfying(matcher.Not, func(*predicateDomainError) bool { t.Fatal("pending predicate called"); return true })
+	NegatedMockOutcomeExpectationToHaveLastThrownTypeSatisfying(matcher.Not, func(*predicateDomainError) bool { t.Fatal("pending predicate called"); return true }, testErrorExtractor)
 	expectThrows(func() { mock.Invoke(2) })
-	MockOutcomeExpectationToHaveLastThrownTypeSatisfying(matcher, func(value *predicateDomainError) bool { return value == second })
+	MockOutcomeExpectationToHaveLastThrownTypeSatisfying(matcher, func(value *predicateDomainError) bool { return value == second }, testErrorExtractor)
 	close(release)
 	<-done
-	MockOutcomeExpectationToHaveNthThrownTypeSatisfying(matcher, 1, func(value *predicateDomainError) bool { return value == first })
-	MockOutcomeExpectationToHaveLastThrownTypeSatisfying(matcher, func(value *predicateDomainError) bool { return value == second })
+	MockOutcomeExpectationToHaveNthThrownTypeSatisfying(matcher, 1, func(value *predicateDomainError) bool { return value == first }, testErrorExtractor)
+	MockOutcomeExpectationToHaveLastThrownTypeSatisfying(matcher, func(value *predicateDomainError) bool { return value == second }, testErrorExtractor)
 }

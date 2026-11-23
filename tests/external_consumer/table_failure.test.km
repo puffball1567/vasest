@@ -1,7 +1,7 @@
 import { Suite, expectEqual, runSuiteAndExit } from "vasest";
 
 struct Row {
-  name: string;
+  name: bstring;
   actual: int;
   expected: int;
 }
@@ -12,7 +12,7 @@ function main(): void {
       Row { name: "first passes", actual: 1, expected: 1 },
       Row { name: "middle fails", actual: 2, expected: 3 },
       Row { name: "last still runs", actual: 4, expected: 4 },
-    ], (row: Row): string => {
+    ], (row: Row): bstring => {
       return row.name;
     }, (row: Row): void => {
       expectEqual(row.actual, row.expected);

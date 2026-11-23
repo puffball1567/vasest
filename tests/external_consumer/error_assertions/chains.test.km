@@ -10,7 +10,7 @@ class CodedError implements error {
     this.code = code;
   }
 
-  public function Error(): string {
+  public function Error(): bstring {
     return fmt.Sprintf("code %d", this.code);
   }
 }
@@ -35,7 +35,7 @@ function main(): void {
     const original = os.PathError { Op: "open", Path: "missing", Err: os.ErrNotExist };
     const wrapped = fmt.Errorf("load: %w", &original);
     let found: *os.PathError = nil;
-    expectErrorAs(wrapped, &found);
+    expectErrorAs(wrapped, &found, (source, target) => errors.As(source, target));
     expectTrue(found == &original);
     expectEqual(found.Path, "missing");
     expectErrorIs(found, os.ErrNotExist);
@@ -43,19 +43,19 @@ function main(): void {
   suite.test("extract an application error", (): void => {
     const original = new CodedError(42);
     const wrapped = errors.Join(errors.New("other"), fmt.Errorf("load: %w", original));
-    let found: CodedError = nil;
-    expectErrorAs(wrapped, &found);
+    let found: CodedError | null = null;
+    expectErrorAs(wrapped, &found, (source, target) => errors.As(source, target));
     expectTrue(found == original);
-    expectEqual(found.code, 42);
+    expectEqual(found!.code, 42);
   });
   suite.test("interface and typed nil targets", (): void => {
     const cause = errors.New("cause");
     let found: error = nil;
-    expectErrorAs(cause, &found);
+    expectErrorAs(cause, &found, (source, target) => errors.As(source, target));
     expectTrue(found == cause);
     let empty: *os.PathError = nil;
     let pathError: *os.PathError = nil;
-    expectErrorAs(empty, &pathError);
+    expectErrorAs(empty, &pathError, (source, target) => errors.As(source, target));
     expectTrue(pathError == nil);
   });
   suite.test("located throws retain their cause and type", (): void => {
@@ -66,9 +66,9 @@ function main(): void {
       });
     });
     expectErrorIs(thrown, original);
-    let found: CodedError = nil;
-    expectErrorAs(thrown, &found);
-    expectEqual(found.code, 27);
+    let found: CodedError | null = null;
+    expectErrorAs(thrown, &found, (source, target) => errors.As(source, target));
+    expectEqual(found!.code, 27);
   });
   suite.runAndExit();
 }
