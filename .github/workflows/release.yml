@@ -43,7 +43,7 @@ jobs:
           go-version: "1.23.x"
           cache: false
       - name: Install Kinmokusei
-        run: go install github.com/puffball1567/kinmokusei/cmd/keika@v0.4.3
+        run: go install github.com/puffball1567/kinmokusei/cmd/keika@v0.4.12
       - name: Prepare the tagged project
         run: |
           "$(go env GOPATH)/bin/keika" deps lock

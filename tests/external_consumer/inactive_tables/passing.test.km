@@ -9,12 +9,12 @@ function main(): void {
   const rows: UserID[] = [first, UserID(1152921504606846978)];
   const repeated: UserID[] = [first, first];
   let named = 0;
-  const name: (value: UserID) => string = (value: UserID): string => {
+  const name: (value: UserID) => bstring = (value: UserID): bstring => {
     expect(value == first || value == rows[1]).toBe(true);
     named++;
     return fmt.Sprintf("skip %d", value);
   };
-  const indexedName: (value: UserID, index: int) => string = (value: UserID, index: int): string => {
+  const indexedName: (value: UserID, index: int) => bstring = (value: UserID, index: int): bstring => {
     expect(value).toEqual(first);
     named++;
     return fmt.Sprintf("indexed skip %d", index);
@@ -27,23 +27,23 @@ function main(): void {
   plain.beforeEachWithContext((context: TestContext): void => { fmt.Println("unreachable-before-each"); });
   plain.afterEachWithContext((context: TestContext): void => { fmt.Println("unreachable-after-each"); });
   plain.skipEach<UserID>(rows, name, body);
-  plain.todoEach(rows, (value: UserID): string => { named++; return fmt.Sprintf("todo %d", value); });
+  plain.todoEach(rows, (value: UserID): bstring => { named++; return fmt.Sprintf("todo %d", value); });
   plain.skipEachIndexed(repeated, indexedName, indexedBody);
-  plain.todoEachIndexed<UserID>(repeated, (value: UserID, index: int): string => { named++; return fmt.Sprintf("indexed todo %d", index); });
+  plain.todoEachIndexed<UserID>(repeated, (value: UserID, index: int): bstring => { named++; return fmt.Sprintf("indexed todo %d", index); });
   plain.runAndExit();
 
-  const shared = new FixtureSuite<string>("inactive shared rows", (context: TestContext): string => {
+  const shared = new FixtureSuite<bstring>("inactive shared rows", (context: TestContext): bstring => {
     fmt.Println("unreachable-shared-setup");
     context.cleanup((): void => { fmt.Println("unreachable-shared-cleanup"); });
     return "fixture";
   });
-  shared.beforeAll((fixture: string): void => { fmt.Println("unreachable-shared-before"); });
-  shared.afterAll((fixture: string): void => { fmt.Println("unreachable-shared-after"); });
-  const sharedBody: (value: UserID, fixture: string, context: TestContext) => void = (value: UserID, fixture: string, context: TestContext): void => { fmt.Println("unreachable-shared-body"); };
+  shared.beforeAll((fixture: bstring): void => { fmt.Println("unreachable-shared-before"); });
+  shared.afterAll((fixture: bstring): void => { fmt.Println("unreachable-shared-after"); });
+  const sharedBody: (value: UserID, fixture: bstring, context: TestContext) => void = (value: UserID, fixture: bstring, context: TestContext): void => { fmt.Println("unreachable-shared-body"); };
   shared.skipEach<UserID>(rows, name, sharedBody);
-  shared.todoEach<UserID>(rows, (value: UserID): string => { named++; return fmt.Sprintf("todo %d", value); });
-  shared.skipEachIndexed<UserID>(repeated, indexedName, (value: UserID, index: int, fixture: string, context: TestContext): void => { fmt.Println("unreachable-shared-indexed-body"); });
-  shared.todoEachIndexed(repeated, (value: UserID, index: int): string => { named++; return fmt.Sprintf("indexed todo %d", index); });
+  shared.todoEach<UserID>(rows, (value: UserID): bstring => { named++; return fmt.Sprintf("todo %d", value); });
+  shared.skipEachIndexed<UserID>(repeated, indexedName, (value: UserID, index: int, fixture: bstring, context: TestContext): void => { fmt.Println("unreachable-shared-indexed-body"); });
+  shared.todoEachIndexed(repeated, (value: UserID, index: int): bstring => { named++; return fmt.Sprintf("indexed todo %d", index); });
   shared.runAndExit();
 
   const validation = new Suite("inactive registration");
@@ -52,25 +52,25 @@ function main(): void {
     const target = new Suite("registration only");
     const empty: UserID[] = [];
     let calls = 0;
-    const nameOf: (value: UserID) => string = (value: UserID): string => { calls++; return "staged"; };
-    expectFunction((): void => { target.skipEach<UserID>(rows, nil, body); }).toThrowMessage("name callback must not be nil");
-    expectFunction((): void => { target.skipEach<UserID>(rows, nameOf, nil); }).toThrowMessage("body must not be nil");
+    const nameOf: (value: UserID) => bstring = (value: UserID): bstring => { calls++; return "staged"; };
+    expectFunction((): void => { target.skipEach<UserID>(rows, null, body); }).toThrowMessage("name callback must not be nil");
+    expectFunction((): void => { target.skipEach<UserID>(rows, nameOf, null); }).toThrowMessage("body must not be nil");
     expectFunction((): void => { target.todoEach<UserID>(empty, nameOf); }).toThrowMessage("at least one value");
-    expectFunction((): void => { target.todoEachIndexed<UserID>(repeated, nil); }).toThrowMessage("name callback must not be nil");
+    expectFunction((): void => { target.todoEachIndexed<UserID>(repeated, null); }).toThrowMessage("name callback must not be nil");
     expect(calls).toEqual(0);
     const cause = errors.New("naming error");
     const caught = expectFunction((): void => {
-      target.skipEachIndexed<UserID>(repeated, (value: UserID, index: int): string => {
+      target.skipEachIndexed<UserID>(repeated, (value: UserID, index: int): bstring => {
         if (index == 1) { throw cause; }
         return "staged";
       }, indexedBody);
     }).toThrow();
     expect(caught).toBe(cause);
     target.todo("staged");
-    const register: (values: UserID[], nameOf: (value: UserID) => string) => void = (values: UserID[], nameOf: (value: UserID) => string): void => { target.todoEach<UserID>(values, nameOf); };
-    register(rows, (value: UserID): string => { return fmt.Sprintf("bound %d", value); });
+    const register: (values: UserID[], nameOf: (value: UserID) => bstring) => void = (values: UserID[], nameOf: (value: UserID) => bstring): void => { target.todoEach<UserID>(values, nameOf); };
+    register(rows, (value: UserID): bstring => { return fmt.Sprintf("bound %d", value); });
     expectFunction((): void => {
-      target.todoEachIndexed<UserID>(repeated, (value: UserID, index: int): string => {
+      target.todoEachIndexed<UserID>(repeated, (value: UserID, index: int): bstring => {
         if (index == 1) { target.todo("early"); }
         return fmt.Sprintf("%s %d", "early", index);
       });

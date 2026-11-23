@@ -7,9 +7,13 @@ alias Callback = () => void;
 
 class Node {
   public value: int;
-  public next: Node;
-  constructor(value: int) { this.value = value; this.next = nil; }
+  public next: Node | null;
+  constructor(value: int) { this.value = value; this.next = null; }
 }
+
+alias OptionalNode = Node | null;
+
+alias OptionalCallback = Callback | null;
 
 function main(): void {
   const suite = new Suite("typed contiguous sequences");
@@ -58,22 +62,22 @@ function main(): void {
     const second = new Node(42);
     first.next = first;
     second.next = second;
-    const values: Node[] = [nil, first, first, nil];
-    expectSlice<Node>(values).toContainSequence([second, second]);
+    const values: OptionalNode[] = [null, first, first, null];
+    expectSlice<OptionalNode>(values).toContainSequence([second, second]);
     second.value = 43;
-    expectSlice<Node>(values).not.toContainSequence([second]);
-    expect<Node>(first.next).toBe(first);
+    expectSlice<OptionalNode>(values).not.toContainSequence([second]);
+    expect<Node | null>(first.next).toBe(first);
     const nans: float64[] = [math.NaN()];
     expectSlice<float64>(nans).not.toContainSequence(nans);
     expectSlice<float64[]>([nans]).toContainSequence([nans]);
     expectSlice<float64>([math.Copysign(0, -1), math.Inf(1), math.Inf(-1)]).toContainSequence([float64(0), math.Inf(1)]);
-    const missing: () => void = nil;
+    const missing: Callback | null = null;
     const callback: () => void = (): void => {};
-    const functions: Callback[] = [callback, missing];
-    const required: Callback[] = [missing];
-    const nonmatching: Callback[] = [callback];
-    expectSlice<Callback>(functions).toContainSequence(required);
-    expectSlice<Callback>(functions).not.toContainSequence(nonmatching);
+    const functions: OptionalCallback[] = [callback, missing];
+    const required: OptionalCallback[] = [missing];
+    const nonmatching: OptionalCallback[] = [callback];
+    expectSlice<OptionalCallback>(functions).toContainSequence(required);
+    expectSlice<OptionalCallback>(functions).not.toContainSequence(nonmatching);
   });
   suite.test("saved matchers observe native backing values", (): void => {
     let values: int[] = [1, 2, 3, 4];

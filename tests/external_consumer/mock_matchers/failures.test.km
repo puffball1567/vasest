@@ -1,4 +1,4 @@
-import { Suite, TestContext, MockFn, MockAction, MockCallSource, expectMock } from "vasest";
+import { MockExpectation, Suite, TestContext, MockFn, MockAction, MockCallSource, expectMock } from "vasest";
 import go fmt from "fmt";
 
 function main(): void {
@@ -25,12 +25,12 @@ function main(): void {
   suite.test("invalid index", (): void => { expectMock<int>(mock).toHaveBeenNthCalledWith(0, 42); });
   suite.test("negated invalid index", (): void => { expectMock<int>(mock).not.toHaveBeenNthCalledWith(0, 42); });
   suite.test("nil source", (): void => {
-    const source: MockCallSource<int> = nil;
-    expectMock<int>(source).toHaveBeenCalled();
+    const source: MockCallSource<int> | null = null;
+    new MockExpectation<int>(source).toHaveBeenCalled();
   });
   suite.test("typed nil source", (): void => {
-    const source: MockFn<int, int> = nil;
-    expectMock<int>(source).not.toHaveBeenCalled();
+    const source: MockCallSource<int> | null = null;
+    new MockExpectation<int>(source).not.toHaveBeenCalled();
   });
   suite.test("later case", (): void => { fmt.Println("mock-matcher-later"); });
   suite.runAndExit();

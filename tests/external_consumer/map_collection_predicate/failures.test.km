@@ -16,10 +16,10 @@ function main(): void {
   suite.test("all mismatch", (): void => { expectMap(values).toSatisfyAll((key: string, value: int): boolean => { return key == "one"; }); });
   suite.test("negated any mismatch", (): void => { expectMap(values).not.toSatisfyAny((key: string, value: int): boolean => { return value == 2; }); });
   suite.test("negated all mismatch", (): void => { expectMap(values).not.toSatisfyAll((key: string, value: int): boolean => { return value > 0; }); });
-  suite.test("nil any predicate", (): void => { expectMap<string, int>(empty).toSatisfyAny(nil); });
-  suite.test("negated nil any predicate", (): void => { expectMap<string, int>(empty).not.toSatisfyAny(nil); });
-  suite.test("nil all predicate", (): void => { expectMap<string, int>(empty).toSatisfyAll(nil); });
-  suite.test("negated nil all predicate", (): void => { expectMap<string, int>(empty).not.toSatisfyAll(nil); });
+  suite.test("nil any predicate", (): void => { expectMap<string, int>(empty).toSatisfyAny(null); });
+  suite.test("negated nil any predicate", (): void => { expectMap<string, int>(empty).not.toSatisfyAny(null); });
+  suite.test("nil all predicate", (): void => { expectMap<string, int>(empty).toSatisfyAll(null); });
+  suite.test("negated nil all predicate", (): void => { expectMap<string, int>(empty).not.toSatisfyAll(null); });
   suite.test("thrown predicate", (): void => {
     expectMap<string, int>(values).not.toSatisfyAny((key: string, value: int): boolean => { throw errors.New("predicate callback failed"); });
   });

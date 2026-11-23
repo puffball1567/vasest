@@ -832,8 +832,8 @@ function main(): void {
 			t.Fatalf("watch artifact manifest: %v %s", err, data)
 		}
 		source := string(assertSourceArchive(t, manifest.Files[0]))
-		failedSource = failedSource || strings.Contains(source, "expectEqual(1, 2)")
-		passingSource = passingSource || strings.Contains(source, "expectEqual(1, 1)")
+		failedSource = failedSource || containsGeneratedEquality(source, "1, 2)")
+		passingSource = passingSource || containsGeneratedEquality(source, "1, 1)")
 		if manifest.Files[0].Html == "" {
 			t.Fatalf("watch coverage HTML missing: %#v", manifest)
 		}
@@ -841,6 +841,15 @@ function main(): void {
 	if !failedSource || !passingSource {
 		t.Fatal("watch iterations lost their source versions")
 	}
+}
+
+func containsGeneratedEquality(source, arguments string) bool {
+	for _, line := range strings.Split(source, "\n") {
+		if strings.Contains(line, "expectEqual(") && strings.HasSuffix(strings.TrimSpace(line), arguments) {
+			return true
+		}
+	}
+	return false
 }
 
 // A real instrumented Go executable exercises covdata conversion. The fake
@@ -1258,8 +1267,12 @@ func TestFailureLocationsRealKinmokusei(t *testing.T) {
 					}
 					data, err := os.ReadFile(location.File)
 					lines := strings.Split(string(data), "\n")
-					if err != nil || location.Line > len(lines) || !strings.Contains(lines[location.Line-1], "expectEqual(1, 2)") {
+					if err != nil || location.Line > len(lines) {
 						t.Fatalf("Go position is not the actual assertion: %#v %v", location, err)
+					}
+					assertion := lines[location.Line-1]
+					if !containsGeneratedEquality(assertion, "1, 2)") {
+						t.Fatalf("Go position is not the actual assertion: %#v %q", location, assertion)
 					}
 					want.Line = 17
 					if results[2].Failures[0].Phase != "cleanup" || results[2].Failures[0].Location != want {
@@ -5155,7 +5168,7 @@ func TestMapEntriesRealKinmokusei(t *testing.T) {
 						if len(result.Failures) != 1 || result.Failures[0].Phase != "body" || len(result.Failures[0].Message) > 1000 {
 							t.Fatal(result)
 						}
-						if !strings.Contains(result.Failures[0].Message, "have entries") || (result.Name == "cyclic entry diagnostics" && !strings.Contains(result.Failures[0].Message, "<cyclic value>")) {
+						if !strings.Contains(result.Failures[0].Message, "have entries") || (result.Name == "cyclic entry diagnostics" && !strings.Contains(result.Failures[0].Message, "possible cyclic value")) {
 							t.Fatal(result)
 						}
 						location := result.Failures[0].Location
@@ -5280,9 +5293,9 @@ func TestCycleDiagnosticsRealKinmokusei(t *testing.T) {
 						if len(result.Failures) != 1 || result.Failures[0].Phase != "body" || len(result.Failures[0].Message) > 1000 {
 							t.Fatal(result)
 						}
-						marker := "<cyclic value>"
+						marker := "possible cyclic value"
 						if strings.HasPrefix(result.Name, "diagnostic ") {
-							marker = "<diagnostic traversal limit>"
+							marker = "diagnostic traversal limit"
 						}
 						if !strings.Contains(result.Failures[0].Message, marker) {
 							t.Fatal(result)

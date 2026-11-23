@@ -2,9 +2,9 @@ import { Suite, expectJSONSnapshot, expectSnapshot, runSuiteAndExit } from "vase
 import go os from "os";
 
 struct SnapshotValue {
-  public title: string;
+  public title: bstring;
   public enabled: boolean;
-  public tags: string[];
+  public tags: bstring[];
 }
 
 function main(): void {

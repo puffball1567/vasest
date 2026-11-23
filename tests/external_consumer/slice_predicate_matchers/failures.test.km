@@ -14,10 +14,10 @@ function main(): void {
   suite.test("all mismatch", (): void => { expectSlice(values).toSatisfyAll((value: int): boolean => { return value < 3; }); });
   suite.test("negated any mismatch", (): void => { expectSlice(values).not.toSatisfyAny((value: int): boolean => { return value == 2; }); });
   suite.test("negated all mismatch", (): void => { expectSlice(values).not.toSatisfyAll((value: int): boolean => { return value > 0; }); });
-  suite.test("nil any predicate", (): void => { expectSlice<int>(empty).toSatisfyAny(nil); });
-  suite.test("negated nil any predicate", (): void => { expectSlice<int>(empty).not.toSatisfyAny(nil); });
-  suite.test("nil all predicate", (): void => { expectSlice<int>(empty).toSatisfyAll(nil); });
-  suite.test("negated nil all predicate", (): void => { expectSlice<int>(empty).not.toSatisfyAll(nil); });
+  suite.test("nil any predicate", (): void => { expectSlice<int>(empty).toSatisfyAny(null); });
+  suite.test("negated nil any predicate", (): void => { expectSlice<int>(empty).not.toSatisfyAny(null); });
+  suite.test("nil all predicate", (): void => { expectSlice<int>(empty).toSatisfyAll(null); });
+  suite.test("negated nil all predicate", (): void => { expectSlice<int>(empty).not.toSatisfyAll(null); });
   suite.test("thrown predicate", (): void => {
     expectSlice<int>(values).not.toSatisfyAny((value: int): boolean => { throw errors.New("predicate callback failed"); });
   });

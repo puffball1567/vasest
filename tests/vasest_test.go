@@ -111,7 +111,7 @@ func TestMockMatchersRejectMismatchesAndInvalidArguments(t *testing.T) {
 		assertThrownMessage(t, check.want, check.body)
 	}
 	for _, source := range []MockCallSource[int]{nil, (*MockFn[int, int])(nil), (*MockAction[int])(nil)} {
-		invalid := expectMock[int](source)
+		invalid := NewMockExpectation[int](source)
 		for _, attempt := range []func(){invalid.ToHaveBeenCalled, invalid.Not.ToHaveBeenCalled,
 			func() { invalid.ToHaveBeenCalledTimes(0) }, func() { invalid.Not.ToHaveBeenCalledTimes(1) },
 			func() { invalid.ToHaveBeenCalledWith(42) }, func() { invalid.Not.ToHaveBeenCalledWith(42) },
@@ -3018,7 +3018,7 @@ func TestMapMatcherNativeKeyPanicsStillUnwindCleanup(t *testing.T) {
 		func() {
 			var events []string
 			defer func() {
-				if recovered := recover(); !strings.Contains(fmt.Sprint(recovered), "hash of unhashable type []int") || fmt.Sprint(events) != "[afterEach cleanup afterAll]" {
+				if recovered := recover(); !strings.Contains(fmt.Sprint(recovered), "unhashable type") || !strings.Contains(fmt.Sprint(recovered), "[]int") || fmt.Sprint(events) != "[afterEach cleanup afterAll]" {
 					t.Fatalf("panic=%#v cleanup=%v", recovered, events)
 				}
 			}()
@@ -3431,7 +3431,7 @@ func TestAssertionLocationsIdentifyActualGoCaller(t *testing.T) {
 		}},
 		{"nil mock", func() {
 			record()
-			expectMock[int](nil).ToHaveBeenCalled()
+			NewMockExpectation[int](nil).ToHaveBeenCalled()
 		}},
 		{"negated typed nil mock", func() {
 			var mock *MockFn[int, int]
@@ -3594,7 +3594,7 @@ func TestAssertionLocationsIdentifyActualGoCaller(t *testing.T) {
 		{"error type matcher", func() {
 			var found *os.PathError
 			record()
-			ErrorExpectationToMatchType(expectErrorValue(errors.New("actual")), &found)
+			ErrorExpectationToMatchType(expectErrorValue(errors.New("actual")), &found, testErrorMatchInto)
 		}},
 		{"negated error type matcher", func() {
 			record()
@@ -3656,7 +3656,7 @@ func TestAssertionLocationsIdentifyActualGoCaller(t *testing.T) {
 		{"function type", func() {
 			var found *os.PathError
 			record()
-			FunctionExpectationToThrowType(expectFunction(func() {}), &found)
+			FunctionExpectationToThrowType(expectFunction(func() {}), &found, testErrorMatchInto)
 		}},
 		{"negated function type", func() {
 			record()
@@ -3665,7 +3665,7 @@ func TestAssertionLocationsIdentifyActualGoCaller(t *testing.T) {
 		{"invalid function type", func() {
 			var found int
 			record()
-			FunctionExpectationToThrowType(expectFunction(func() {}), &found)
+			FunctionExpectationToThrowType(expectFunction(func() {}), &found, testErrorMatchInto)
 		}},
 		{"invalid negated function type", func() {
 			record()
@@ -3678,17 +3678,17 @@ func TestAssertionLocationsIdentifyActualGoCaller(t *testing.T) {
 		{"error type", func() {
 			var target *os.PathError
 			record()
-			expectErrorAs(errors.New("actual"), &target)
+			expectErrorAs(errors.New("actual"), &target, testErrorMatchInto)
 		}},
 		{"invalid error target", func() {
 			var target int
 			record()
-			expectErrorAs(errors.New("actual"), &target)
+			expectErrorAs(errors.New("actual"), &target, testErrorMatchInto)
 		}},
 		{"nil error target", func() {
 			var target **os.PathError
 			record()
-			expectErrorAs(errors.New("actual"), target)
+			expectErrorAs(errors.New("actual"), target, testErrorMatchInto)
 		}},
 		{"throws wrapper", func() {
 			record()
@@ -3991,7 +3991,7 @@ func TestFunctionMatchersExecuteOncePerAssertionAndPreserveErrors(t *testing.T) 
 	matcher.ToThrowMessage("code 42")
 	matcher.ToThrowCause(cause)
 	var found *assertionCodeError
-	FunctionExpectationToThrowType[*assertionCodeError](matcher, &found)
+	FunctionExpectationToThrowType[*assertionCodeError](matcher, &found, testErrorMatchInto[*assertionCodeError])
 	if found != cause || calls != 4 {
 		t.Fatal(found, calls)
 	}
@@ -4003,19 +4003,19 @@ func TestFunctionMatchersExecuteOncePerAssertionAndPreserveErrors(t *testing.T) 
 	}
 	mapped := expectFunction(func() { panic(__kinmokuseiThrown{err: assertionMappedError{code: cause}}) })
 	mapped.ToThrowCause(&assertionCodeError{Code: 42})
-	FunctionExpectationToThrowType(mapped, &found)
+	FunctionExpectationToThrowType(mapped, &found, testErrorMatchInto)
 	if found != cause {
 		t.Fatal("custom As result lost")
 	}
 	assertThrownMessage(t, "not to throw a value", func() { NegatedFunctionExpectationToThrowType[*assertionCodeError](mapped.Not) })
 	assertThrownMessage(t, "(errors.As)", func() {
-		FunctionExpectationToThrowType(expectFunction(func() { panic(__kinmokuseiThrown{err: assertionMutatingAsError{}}) }), &found)
+		FunctionExpectationToThrowType(expectFunction(func() { panic(__kinmokuseiThrown{err: assertionMutatingAsError{}}) }), &found, testErrorMatchInto)
 	})
 	if found == nil || found.Code != 37 {
 		t.Fatal("custom As destination mutation lost")
 	}
 	var typedNil *os.PathError
-	FunctionExpectationToThrowType(expectFunction(func() { panic(__kinmokuseiThrown{err: typedNil}) }), &typedNil)
+	FunctionExpectationToThrowType(expectFunction(func() { panic(__kinmokuseiThrown{err: typedNil}) }), &typedNil, testErrorMatchInto)
 	if typedNil != nil {
 		t.Fatal("typed nil extraction lost")
 	}
@@ -4050,8 +4050,8 @@ func TestFunctionMatchersValidateBeforeCallingAndReportMismatches(t *testing.T) 
 	}{
 		{"fragment must not be empty", func() { noThrow.ToThrowMessage("") }},
 		{"fragment must not be empty", func() { noThrow.Not.ToThrowMessage("") }},
-		{"target must not be nil", func() { FunctionExpectationToThrowType(noThrow, nilTarget) }},
-		{"got int", func() { FunctionExpectationToThrowType(noThrow, &invalid) }},
+		{"target must not be nil", func() { FunctionExpectationToThrowType(noThrow, nilTarget, testErrorMatchInto) }},
+		{"got int", func() { FunctionExpectationToThrowType(noThrow, &invalid, testErrorMatchInto) }},
 		{"got int", func() { NegatedFunctionExpectationToThrowType[int](noThrow.Not) }},
 		{"got fs.PathError", func() { NegatedFunctionExpectationToThrowType[os.PathError](noThrow.Not) }},
 	}
@@ -4065,7 +4065,7 @@ func TestFunctionMatchersValidateBeforeCallingAndReportMismatches(t *testing.T) 
 		func() { noThrow.ToThrow() },
 		func() { noThrow.ToThrowMessage("missing") },
 		func() { noThrow.ToThrowCause(os.ErrNotExist) },
-		func() { FunctionExpectationToThrowType(noThrow, &target) },
+		func() { FunctionExpectationToThrowType(noThrow, &target, testErrorMatchInto) },
 	} {
 		assertThrownMessage(t, "expected function to throw an error", attempt)
 	}
@@ -4079,7 +4079,7 @@ func TestFunctionMatchersValidateBeforeCallingAndReportMismatches(t *testing.T) 
 	assertThrownMessage(t, "not to throw containing", func() { throwing.Not.ToThrowMessage("actual") })
 	assertThrownMessage(t, "(errors.Is)", func() { throwing.ToThrowCause(errors.New("actual")) })
 	assertThrownMessage(t, "not to throw matching", func() { throwing.Not.ToThrowCause(cause) })
-	assertThrownMessage(t, "(errors.As)", func() { FunctionExpectationToThrowType(throwing, &target) })
+	assertThrownMessage(t, "(errors.As)", func() { FunctionExpectationToThrowType(throwing, &target, testErrorMatchInto) })
 	assertThrownMessage(t, "not to throw a value", func() { NegatedFunctionExpectationToThrowType[error](throwing.Not) })
 	if calls != 11 {
 		t.Fatal(calls)
@@ -4089,7 +4089,7 @@ func TestFunctionMatchersValidateBeforeCallingAndReportMismatches(t *testing.T) 
 		func() { missing.ToThrow() }, missing.Not.ToThrow,
 		func() { missing.ToThrowMessage("message") }, func() { missing.Not.ToThrowMessage("message") },
 		func() { missing.ToThrowCause(cause) }, func() { missing.Not.ToThrowCause(cause) },
-		func() { FunctionExpectationToThrowType(missing, &target) },
+		func() { FunctionExpectationToThrowType(missing, &target, testErrorMatchInto) },
 		func() { NegatedFunctionExpectationToThrowType[*os.PathError](missing.Not) },
 	} {
 		assertThrownMessage(t, "function expectation body must not be nil", attempt)
@@ -4108,7 +4108,10 @@ func TestFunctionMatcherNativePanicsStillUnwindCleanup(t *testing.T) {
 		{"native function matcher panic", func() { bodyPanic.ToThrowMessage("missing") }},
 		{"native error matcher panic", func() { matchingPanic.ToThrowCause(os.ErrNotExist) }},
 		{"native error matcher panic", func() { matchingPanic.Not.ToThrowCause(os.ErrNotExist) }},
-		{"native error matcher panic", func() { var found *os.PathError; FunctionExpectationToThrowType(matchingPanic, &found) }},
+		{"native error matcher panic", func() {
+			var found *os.PathError
+			FunctionExpectationToThrowType(matchingPanic, &found, testErrorMatchInto)
+		}},
 		{"native error matcher panic", func() { NegatedFunctionExpectationToThrowType[*os.PathError](matchingPanic.Not) }},
 	}
 	for _, check := range checks {
@@ -4144,7 +4147,7 @@ func TestErrorMatchersPreserveCauseTypeAndCustomMatching(t *testing.T) {
 	NegatedErrorExpectationToMatchType[*os.PathError](expectErrorValue(nil).Not)
 	NegatedErrorExpectationToMatchType[*os.PathError](matcher.Not)
 	var found error
-	ErrorExpectationToMatchType(matcher, &found)
+	ErrorExpectationToMatchType(matcher, &found, testErrorMatchInto)
 	if found != wrapped {
 		t.Fatal("interface extraction changed error identity")
 	}
@@ -4153,13 +4156,13 @@ func TestErrorMatchersPreserveCauseTypeAndCustomMatching(t *testing.T) {
 	mapped.ToMatchCause(&assertionCodeError{Code: 42})
 	mapped.Not.ToMatchCause(&assertionCodeError{Code: 43})
 	var extracted *assertionCodeError
-	ErrorExpectationToMatchType[*assertionCodeError](mapped, &extracted)
+	ErrorExpectationToMatchType[*assertionCodeError](mapped, &extracted, testErrorMatchInto[*assertionCodeError])
 	if extracted != code {
 		t.Fatal("custom As extraction lost")
 	}
 	assertThrownMessage(t, "not to contain", func() { NegatedErrorExpectationToMatchType[*assertionCodeError](mapped.Not) })
 	var stringer fmt.Stringer
-	ErrorExpectationToMatchType(expectErrorValue(fmt.Errorf("outer: %w", code)), &stringer)
+	ErrorExpectationToMatchType(expectErrorValue(fmt.Errorf("outer: %w", code)), &stringer, testErrorMatchInto)
 	if stringer != code {
 		t.Fatal("non-error interface extraction lost")
 	}
@@ -4170,7 +4173,7 @@ func TestErrorMatchersHandleTypedNilAndValidateTypesBeforeMatching(t *testing.T)
 	typedNil := expectErrorValue(error(empty))
 	typedNil.Not.ToBeNil() // The error interface is non-nil, as with err != nil.
 	found := &os.PathError{Path: "previous"}
-	ErrorExpectationToMatchType(typedNil, &found)
+	ErrorExpectationToMatchType(typedNil, &found, testErrorMatchInto)
 	if found != nil {
 		t.Fatal("typed nil extraction lost")
 	}
@@ -4181,9 +4184,9 @@ func TestErrorMatchersHandleTypedNilAndValidateTypesBeforeMatching(t *testing.T)
 		var integer int
 		var value os.PathError
 		var nilTarget **os.PathError
-		assertThrownMessage(t, "target must not be nil", func() { ErrorExpectationToMatchType(matcher, nilTarget) })
-		assertThrownMessage(t, "got int", func() { ErrorExpectationToMatchType(matcher, &integer) })
-		assertThrownMessage(t, "got fs.PathError", func() { ErrorExpectationToMatchType(matcher, &value) })
+		assertThrownMessage(t, "target must not be nil", func() { ErrorExpectationToMatchType(matcher, nilTarget, testErrorMatchInto) })
+		assertThrownMessage(t, "got int", func() { ErrorExpectationToMatchType(matcher, &integer, testErrorMatchInto) })
+		assertThrownMessage(t, "got fs.PathError", func() { ErrorExpectationToMatchType(matcher, &value, testErrorMatchInto) })
 		assertThrownMessage(t, "got int", func() { NegatedErrorExpectationToMatchType[int](matcher.Not) })
 		assertThrownMessage(t, "got fs.PathError", func() { NegatedErrorExpectationToMatchType[os.PathError](matcher.Not) })
 	}
@@ -4192,12 +4195,16 @@ func TestErrorMatchersHandleTypedNilAndValidateTypesBeforeMatching(t *testing.T)
 	assertThrownMessage(t, "(errors.Is)", func() { expectErrorValue(nil).ToMatchCause(os.ErrNotExist) })
 	var unchanged *os.PathError = &os.PathError{Path: "previous"}
 	previous := unchanged
-	assertThrownMessage(t, "(errors.As)", func() { ErrorExpectationToMatchType(expectErrorValue(errors.New("other")), &unchanged) })
+	assertThrownMessage(t, "(errors.As)", func() {
+		ErrorExpectationToMatchType(expectErrorValue(errors.New("other")), &unchanged, testErrorMatchInto)
+	})
 	if unchanged != previous {
 		t.Fatal("mismatch changed ordinary destination")
 	}
 	var updated *assertionCodeError
-	assertThrownMessage(t, "(errors.As)", func() { ErrorExpectationToMatchType(expectErrorValue(assertionMutatingAsError{}), &updated) })
+	assertThrownMessage(t, "(errors.As)", func() {
+		ErrorExpectationToMatchType(expectErrorValue(assertionMutatingAsError{}), &updated, testErrorMatchInto)
+	})
 	if updated == nil || updated.Code != 37 {
 		t.Fatal("custom As destination update lost")
 	}
@@ -4215,7 +4222,7 @@ func TestErrorMatchersNativePanicsStillUnwindCleanup(t *testing.T) {
 	for _, attempt := range []func(){
 		func() { matcher.ToMatchCause(os.ErrNotExist) },
 		func() { matcher.Not.ToMatchCause(os.ErrNotExist) },
-		func() { var found *os.PathError; ErrorExpectationToMatchType(matcher, &found) },
+		func() { var found *os.PathError; ErrorExpectationToMatchType(matcher, &found, testErrorMatchInto) },
 		func() { NegatedErrorExpectationToMatchType[*os.PathError](matcher.Not) },
 	} {
 		func() {
@@ -4241,54 +4248,54 @@ func TestExpectErrorAsExtractsTypedValuesAndInterfaces(t *testing.T) {
 	original := &os.PathError{Op: "open", Path: "missing", Err: os.ErrNotExist}
 	wrapped := errors.Join(errors.New("unrelated"), fmt.Errorf("wrapped: %w", original))
 	var found *os.PathError
-	expectErrorAs(wrapped, &found)
+	expectErrorAs(wrapped, &found, testErrorMatchInto)
 	if found != original || found.Path != "missing" {
 		t.Fatalf("extraction changed identity: %#v", found)
 	}
 	var anyError error
-	expectErrorAs(wrapped, &anyError)
+	expectErrorAs(wrapped, &anyError, testErrorMatchInto)
 	if anyError != wrapped {
 		t.Fatalf("interface extraction=%v", anyError)
 	}
 	code := &assertionCodeError{Code: 27}
 	var stringer fmt.Stringer
-	expectErrorAs(fmt.Errorf("wrapped: %w", code), &stringer)
+	expectErrorAs(fmt.Errorf("wrapped: %w", code), &stringer, testErrorMatchInto)
 	if stringer != code {
 		t.Fatalf("non-error interface extraction=%v", stringer)
 	}
 	var empty any
-	expectErrorAs(wrapped, &empty)
+	expectErrorAs(wrapped, &empty, testErrorMatchInto)
 	if empty != wrapped {
 		t.Fatalf("empty interface extraction=%v", empty)
 	}
 	// Custom As may supply a value absent from the chain's concrete types.
 	var mapped *assertionCodeError
-	expectErrorAs(errors.Join(errors.New("other"), assertionMappedError{code: code}), &mapped)
+	expectErrorAs(errors.Join(errors.New("other"), assertionMappedError{code: code}), &mapped, testErrorMatchInto)
 	if mapped != code {
 		t.Fatalf("custom As result=%#v", mapped)
 	}
-	assertThrownMessage(t, "(errors.As)", func() { expectErrorAs(assertionMutatingAsError{}, &mapped) })
+	assertThrownMessage(t, "(errors.As)", func() { expectErrorAs(assertionMutatingAsError{}, &mapped, testErrorMatchInto) })
 	if mapped == nil || mapped.Code != 37 {
 		t.Fatalf("custom As destination update lost: %#v", mapped)
 	}
 	// A typed nil error still matches its dynamic type and assigns nil.
 	found = original
 	var typedNil *os.PathError
-	expectErrorAs(error(typedNil), &found)
+	expectErrorAs(error(typedNil), &found, testErrorMatchInto)
 	if found != nil {
 		t.Fatal("typed nil was not assigned")
 	}
 	// A failed match must leave an existing destination unchanged.
 	found = original
-	assertThrownMessage(t, "*fs.PathError (errors.As)", func() { expectErrorAs(errors.New("other"), &found) })
+	assertThrownMessage(t, "*fs.PathError (errors.As)", func() { expectErrorAs(errors.New("other"), &found, testErrorMatchInto) })
 	if found != original {
 		t.Fatal("mismatch modified destination")
 	}
-	assertThrownMessage(t, "expected error <nil>", func() { expectErrorAs(nil, &found) })
+	assertThrownMessage(t, "expected error <nil>", func() { expectErrorAs(nil, &found, testErrorMatchInto) })
 	located := expectThrows(func() {
 		withTestLocation("errors.test.km", 11, func() { panic(__kinmokuseiThrown{err: original}) })
 	})
-	expectErrorAs(located, &found)
+	expectErrorAs(located, &found, testErrorMatchInto)
 	if found != original {
 		t.Fatal("location wrapper hid concrete error")
 	}
@@ -4303,9 +4310,9 @@ func TestExpectErrorAsInvalidTargetsFailAsAssertions(t *testing.T) {
 			name, want string
 			body       func()
 		}{
-			{"nil target", "target must not be nil", func() { expectErrorAs(source, nilTarget) }},
-			{"primitive target", "got int", func() { expectErrorAs(source, &integer) }},
-			{"value with pointer receiver", "got fs.PathError", func() { expectErrorAs(source, &concrete) }},
+			{"nil target", "target must not be nil", func() { expectErrorAs(source, nilTarget, testErrorMatchInto) }},
+			{"primitive target", "got int", func() { expectErrorAs(source, &integer, testErrorMatchInto) }},
+			{"value with pointer receiver", "got fs.PathError", func() { expectErrorAs(source, &concrete, testErrorMatchInto) }},
 		} {
 			t.Run(fmt.Sprintf("%v/%s", source, tc.name), func(t *testing.T) { assertThrownMessage(t, tc.want, tc.body) })
 		}
@@ -4320,7 +4327,7 @@ func TestErrorAssertionFailuresContinueAndRunCleanup(t *testing.T) {
 		ctx.Cleanup(func() { phases = append(phases, "cleanup") })
 		expectErrorIs(errors.New("actual"), errors.New("expected"))
 	})
-	suite.Test("invalid type", func() { var wrong int; expectErrorAs(errors.New("actual"), &wrong) })
+	suite.Test("invalid type", func() { var wrong int; expectErrorAs(errors.New("actual"), &wrong, testErrorMatchInto) })
 	suite.Test("later case", func() { phases = append(phases, "later") })
 	summary := suite.RunTo(&bytes.Buffer{})
 	if summary.Passed != 1 || summary.Failed != 2 || fmt.Sprint(phases) != "[afterEach cleanup afterEach later afterEach]" {

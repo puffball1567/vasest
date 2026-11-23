@@ -1,3 +1,4 @@
+import go os from "os";
 import { Suite, TestContext, MockFn, MockAction, expect, expectMock, expectMockReturn, expectMockOutcome, expectFunction, skipTest } from "vasest";
 import go errors from "errors";
 import go fmt from "fmt";
@@ -7,7 +8,17 @@ class DomainError implements error {
   public code: UserID;
   public reads: int;
   constructor(code: UserID) { this.code = code; this.reads = 0; }
-  public function Error(): string { this.reads++; throw errors.New("unexpected Error call"); }
+  public function Error(): bstring { this.reads++; throw errors.New("unexpected Error call"); }
+}
+
+function extractDomainError(source: error, predicate: (value: DomainError) => boolean): boolean {
+  let value: DomainError | null = null;
+  return errors.As(source, &value) && value != null && predicate(value!);
+}
+
+function extractPathError(source: error, predicate: (value: *os.PathError) => boolean): boolean {
+  let value: *os.PathError = nil;
+  return errors.As(source, &value) && predicate(value);
 }
 
 function main(): void {
@@ -44,15 +55,15 @@ function main(): void {
     setDefaultError(original);
     original.code = UserID(1152921504606846978);
     call(UserID(1));
-    expectFunction((): void => { call(UserID(2)); }).toThrowTypeSatisfying<DomainError>((value: DomainError): boolean => { return value == original && value.code == UserID(1152921504606846978); });
-    expectFunction((): void => { call(UserID(3)); }).toThrowTypeSatisfying<DomainError>((value: DomainError): boolean => { return value == original; });
-    expectMockOutcome(mock).toHaveLastThrownTypeSatisfying<DomainError>((value: DomainError): boolean => { return value == original; });
+    expectFunction((): void => { call(UserID(2)); }).toThrowTypeSatisfying<DomainError>((value: DomainError): boolean => { return value == original && value.code == UserID(1152921504606846978); }, extractDomainError);
+    expectFunction((): void => { call(UserID(3)); }).toThrowTypeSatisfying<DomainError>((value: DomainError): boolean => { return value == original; }, extractDomainError);
+    expectMockOutcome(mock).toHaveLastThrownTypeSatisfying<DomainError>((value: DomainError): boolean => { return value == original; }, extractDomainError);
     expect(total).toEqual(UserID(1)); expect(original.reads).toEqual(0);
     mock.implement((value: UserID): void => { total += value; }); call(UserID(4)); expect(total).toEqual(UserID(5));
   });
   suite.test("nil and typed nil remain throw payloads", (): void => {
     const missing: error = nil;
-    const typedNil: DomainError = nil;
+    const typedNil: *os.PathError = nil;
     const expected: error = typedNil;
     const mock = new MockFn<int, string>((value: int): string => { return "normal"; });
     const action = new MockAction<int>((value: int): void => {});
@@ -62,7 +73,7 @@ function main(): void {
     expect(mock.invoke(2)).toEqual("normal"); action.invoke(2);
     mock.throwError(typedNil); action.throwError(typedNil);
     expectFunction((): void => { mock.invoke(3); }).toThrowSatisfying((value: error): boolean => { return value != nil && value == expected; });
-    expectFunction((): void => { action.invoke(3); }).toThrowTypeSatisfying<DomainError>((value: DomainError): boolean => { return value == nil; });
+    expectFunction((): void => { action.invoke(3); }).toThrowTypeSatisfying<*os.PathError>((value: *os.PathError): boolean => { return value == nil; }, extractPathError);
     expectMockOutcome(mock).toHaveThrownTimes(2); expectMockOutcome(action).toHaveThrownTimes(2);
   });
   suite.test("clear retains queues reset replaces behavior and saved histories", (): void => {

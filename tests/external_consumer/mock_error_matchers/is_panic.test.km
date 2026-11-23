@@ -6,7 +6,7 @@ import go os from "os";
 
 class MatchingPanic implements error {
   constructor() {}
-  public function Error(): string { return "matching panic"; }
+  public function Error(): bstring { return "matching panic"; }
   public function Is(target: error): boolean { reflect.ValueOf(42).Index(0); return false; }
 }
 

@@ -6,9 +6,13 @@ type UserID = distinct uint64;
 
 class Node {
   public value: int;
-  public next: Node;
-  constructor(value: int) { this.value=value;this.next=nil; }
+  public next: Node | null;
+  constructor(value: int) { this.value=value;this.next=null; }
 }
+
+alias OptionalNode = Node | null;
+
+alias ElementPredicate = (value: UserID) => boolean;
 
 function main(): void {
   const suite = new Suite("typed selected slice elements");
@@ -17,9 +21,9 @@ function main(): void {
     const values: UserID[] = [large, UserID(42)];
     const matcher: SliceExpectation<UserID> = expectSlice<UserID>(values);
     const equal: (index: int, expected: UserID) => void = matcher.toHaveElement;
-    const predicate: (index: int, predicate: (value: UserID) => boolean) => void = matcher.toHaveElementSatisfying;
+    const predicate: (index: int, predicate: ElementPredicate | null) => void = matcher.toHaveElementSatisfying;
     const negative: (index: int, expected: UserID) => void = matcher.not.toHaveElement;
-    const negativePredicate: (index: int, predicate: (value: UserID) => boolean) => void = matcher.not.toHaveElementSatisfying;
+    const negativePredicate: (index: int, predicate: ElementPredicate | null) => void = matcher.not.toHaveElementSatisfying;
     equal(0,large);
     predicate(0,(value: UserID): boolean => {return value==large;});
     negative(1,large);
@@ -53,10 +57,14 @@ function main(): void {
     const first=new Node(42);
     const second=new Node(42);
     first.next=first;second.next=second;
-    const nodes: Node[]=[nil,first];
-    expectSlice<Node>(nodes).toHaveElement(0,nil);
-    expectSlice<Node>(nodes).toHaveElement(1,second);
-    expectSlice<Node>(nodes).toHaveElementSatisfying(1,(value: Node): boolean=>{value.value++;return value==first;});
+    const nodes: OptionalNode[]=[null,first];
+    expectSlice<OptionalNode>(nodes).toHaveElement(0,null);
+    expectSlice<OptionalNode>(nodes).toHaveElement(1,second);
+    expectSlice<OptionalNode>(nodes).toHaveElementSatisfying(1,(value: OptionalNode): boolean=>{
+      if (value == null) { return false; }
+      value.value++;
+      return value == first;
+    });
     expect<int>(first.value).toEqual(43);
     const nans: float64[]=[math.NaN()];
     expectSlice<float64>(nans).not.toHaveElement(0,nans[0]);

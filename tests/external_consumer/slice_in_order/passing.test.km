@@ -7,9 +7,13 @@ alias Callback = () => void;
 
 class Node {
   public value: int;
-  public next: Node;
-  constructor(value: int) { this.value = value; this.next = nil; }
+  public next: Node | null;
+  constructor(value: int) { this.value = value; this.next = null; }
 }
+
+alias OptionalNode = Node | null;
+
+alias OptionalCallback = Callback | null;
 
 function main(): void {
   const suite = new Suite("typed ordered containment");
@@ -59,22 +63,22 @@ function main(): void {
     const second = new Node(42);
     first.next = first;
     second.next = second;
-    const values: Node[] = [nil, first, nil, first];
-    expectSlice<Node>(values).toContainInOrder([second, second]);
+    const values: OptionalNode[] = [null, first, null, first];
+    expectSlice<OptionalNode>(values).toContainInOrder([second, second]);
     second.value = 43;
-    expectSlice<Node>(values).not.toContainInOrder([second]);
-    expect<Node>(first.next).toBe(first);
+    expectSlice<OptionalNode>(values).not.toContainInOrder([second]);
+    expect<Node | null>(first.next).toBe(first);
     const nans: float64[] = [math.NaN()];
     expectSlice<float64>(nans).not.toContainInOrder(nans);
     expectSlice<float64[]>([nans]).toContainInOrder([nans]);
     expectSlice<float64>([math.Copysign(0, -1), math.Inf(1), math.Inf(-1)]).toContainInOrder([float64(0), math.Inf(-1)]);
-    const missing: Callback = nil;
+    const missing: OptionalCallback = null;
     const callback: Callback = (): void => {};
-    const functions: Callback[] = [callback, missing];
-    const required: Callback[] = [missing];
-    const nonmatching: Callback[] = [callback];
-    expectSlice<Callback>(functions).toContainInOrder(required);
-    expectSlice<Callback>(functions).not.toContainInOrder(nonmatching);
+    const functions: OptionalCallback[] = [callback, missing];
+    const required: OptionalCallback[] = [missing];
+    const nonmatching: OptionalCallback[] = [callback];
+    expectSlice<OptionalCallback>(functions).toContainInOrder(required);
+    expectSlice<OptionalCallback>(functions).not.toContainInOrder(nonmatching);
   });
   suite.test("saved matchers observe native backing values", (): void => {
     let values: int[] = [1, 2, 3, 4];

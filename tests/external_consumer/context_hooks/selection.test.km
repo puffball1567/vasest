@@ -2,7 +2,7 @@ import { Suite, FixtureSuite, TestContext, expect } from "vasest";
 import go fmt from "fmt";
 
 function main(): void {
-  let saved: TestContext = nil;
+  let saved: TestContext | null = null;
   let before = 0;
   let after = 0;
   let body = 0;
@@ -12,18 +12,18 @@ function main(): void {
     before++; saved = context;
     context.cleanup((): void => { cleaned++; });
   });
-  suite.afterEachWithContext((context: TestContext): void => { after++; expect(context).toBe(saved); });
-  suite.testEachIndexedWithContext<int>([42, 42, 42], (value: int, index: int): string => { return fmt.Sprintf("row %d", index); }, (value: int, index: int, context: TestContext): void => {
-    body++; expect(context).toBe(saved); fmt.Printf("context-hook-selected-plain-%d\n", index);
+  suite.afterEachWithContext((context: TestContext): void => { after++; expect<TestContext | null>(context).toBe(saved); });
+  suite.testEachIndexedWithContext<int>([42, 42, 42], (value: int, index: int): bstring => { return fmt.Sprintf("row %d", index); }, (value: int, index: int, context: TestContext): void => {
+    body++; expect<TestContext | null>(context).toBe(saved); fmt.Printf("context-hook-selected-plain-%d\n", index);
   });
   suite.afterAll((): void => { expect(before).toEqual(body); expect(after).toEqual(body); expect(cleaned).toEqual(body); });
   suite.runAndExit();
 
-  const shared = new FixtureSuite<string>("selected shared context hooks", (context: TestContext): string => { return "shared"; });
-  shared.beforeEachWithContext((fixture: string, context: TestContext): void => { saved = context; expect(fixture).toEqual("shared"); });
-  shared.afterEachWithContext((fixture: string, context: TestContext): void => { expect(context).toBe(saved); });
-  shared.testEachIndexed<int>([42, 42, 42], (value: int, index: int): string => { return fmt.Sprintf("shared row %d", index); }, (value: int, index: int, fixture: string, context: TestContext): void => {
-    expect(context).toBe(saved); fmt.Printf("context-hook-selected-shared-%d\n", index);
+  const shared = new FixtureSuite<bstring>("selected shared context hooks", (context: TestContext): bstring => { return "shared"; });
+  shared.beforeEachWithContext((fixture: bstring, context: TestContext): void => { saved = context; expect(fixture).toEqual("shared"); });
+  shared.afterEachWithContext((fixture: bstring, context: TestContext): void => { expect<TestContext | null>(context).toBe(saved); });
+  shared.testEachIndexed<int>([42, 42, 42], (value: int, index: int): bstring => { return fmt.Sprintf("shared row %d", index); }, (value: int, index: int, fixture: bstring, context: TestContext): void => {
+    expect<TestContext | null>(context).toBe(saved); fmt.Printf("context-hook-selected-shared-%d\n", index);
   });
   shared.runAndExit();
 }

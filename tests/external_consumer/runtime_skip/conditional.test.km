@@ -20,15 +20,15 @@ function main(): void {
     skipTest("service <&> unavailable");
     fmt.Println("unreachable-body");
   });
-  suite.testWithFixture("fixture skipped", (context: TestContext): string => {
+  suite.testWithFixture("fixture skipped", (context: TestContext): bstring => {
     const path = context.tempDir();
     context.cleanup((): void => { fmt.Println("fixture-resource-cleanup"); });
     skipTest("fixture unavailable");
     return path;
-  }, (path: string, context: TestContext): void => {
+  }, (path: bstring, context: TestContext): void => {
     fmt.Println("unreachable-fixture-body");
   });
-  suite.testEachWithFixture([1, 2], (row: int): string => {
+  suite.testEachWithFixture([1, 2], (row: int): bstring => {
     return fmt.Sprintf("row %d", row);
   }, (row: int, context: TestContext): int => {
     context.cleanup((): void => { fmt.Printf("row-cleanup:%d\n", row); });

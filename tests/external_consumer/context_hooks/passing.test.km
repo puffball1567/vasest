@@ -7,8 +7,8 @@ type UserID = distinct int64;
 function main(): void {
   const suite = new Suite("context hook lifecycle");
   const original = os.Getenv("VASEST_CONTEXT_HOOK_DATA");
-  let saved: TestContext = nil;
-  let path = "";
+  let saved: TestContext | null = null;
+  let path: bstring = "";
   let before = 0;
   let after = 0;
   let cleaned = 0;
@@ -23,18 +23,18 @@ function main(): void {
   suite.afterEach((): void => { fmt.Println("unreachable-replaced-after"); });
   suite.afterEachWithContext((context: TestContext): void => {
     after++;
-    expect(context).toBe(saved);
+    expect<TestContext | null>(context).toBe(saved);
     expect(os.Getenv("VASEST_CONTEXT_HOOK_DATA")).toEqual(path);
     const [info, statError] = os.Stat(path);
     expectNoError(statError);
     context.cleanup((): void => { fmt.Println("context-hook-after-cleanup"); });
   });
-  expectFunction((): void => { suite.beforeEachWithContext(nil); }).toThrowMessage("must not be nil");
-  expectFunction((): void => { suite.afterEachWithContext(nil); }).toThrowMessage("must not be nil");
+  expectFunction((): void => { suite.beforeEachWithContext(null); }).toThrowMessage("must not be nil");
+  expectFunction((): void => { suite.afterEachWithContext(null); }).toThrowMessage("must not be nil");
   suite.test("ordinary body uses hook resources", (): void => { expect(os.Getenv("VASEST_CONTEXT_HOOK_DATA")).toEqual(path); });
-  suite.testWithContext("context body receives same context", (context: TestContext): void => { expect(context).toBe(saved); });
-  suite.testWithFixture<TestContext>("fixture receives same context", (context: TestContext): TestContext => { expect(context).toBe(saved); return context; }, (fixture: TestContext, context: TestContext): void => { expect(fixture).toBe(context); });
-  suite.testEachIndexedWithContext<int>([42, 42], (value: int, index: int): string => { return fmt.Sprintf("row %d", index); }, (value: int, index: int, context: TestContext): void => { expect(context).toBe(saved); expect(value).toEqual(42); });
+  suite.testWithContext("context body receives same context", (context: TestContext): void => { expect<TestContext | null>(context).toBe(saved); });
+  suite.testWithFixture<TestContext>("fixture receives same context", (context: TestContext): TestContext => { expect<TestContext | null>(context).toBe(saved); return context; }, (fixture: TestContext, context: TestContext): void => { expect(fixture).toBe(context); });
+  suite.testEachIndexedWithContext<int>([42, 42], (value: int, index: int): bstring => { return fmt.Sprintf("row %d", index); }, (value: int, index: int, context: TestContext): void => { expect<TestContext | null>(context).toBe(saved); expect(value).toEqual(42); });
   suite.skip("disabled", (): void => { fmt.Println("unreachable-skipped-body"); });
   suite.todo("planned");
   suite.afterAll((): void => {
@@ -42,11 +42,11 @@ function main(): void {
     expect(os.Getenv("VASEST_CONTEXT_HOOK_DATA")).toEqual(original);
     const [info, statError] = os.Stat(path);
     expect(os.IsNotExist(statError)).toBe(true);
-    expectFunction((): void => { saved.cleanup((): void => {}); }).toThrowMessage("closed");
+    expectFunction((): void => { saved!.cleanup((): void => {}); }).toThrowMessage("closed");
   });
   suite.runAndExit();
 
-  let sharedContext: TestContext = nil;
+  let sharedContext: TestContext | null = null;
   let sharedCleanups = 0;
   const shared = new FixtureSuite<UserID>("typed shared context hooks", (context: TestContext): UserID => {
     context.cleanup((): void => { fmt.Println("context-hook-shared-cleanup"); });
@@ -58,10 +58,10 @@ function main(): void {
     context.cleanup((): void => { sharedCleanups++; });
   });
   shared.afterEachWithContext((fixture: UserID, context: TestContext): void => {
-    expect(context).toBe(sharedContext);
+    expect<TestContext | null>(context).toBe(sharedContext);
     expect(fixture).toEqual(UserID(1152921504606846977));
   });
-  shared.testEachIndexed<int>([42, 42], (value: int, index: int): string => { return fmt.Sprintf("shared row %d", index); }, (value: int, index: int, fixture: UserID, context: TestContext): void => { expect(context).toBe(sharedContext); });
+  shared.testEachIndexed<int>([42, 42], (value: int, index: int): bstring => { return fmt.Sprintf("shared row %d", index); }, (value: int, index: int, fixture: UserID, context: TestContext): void => { expect<TestContext | null>(context).toBe(sharedContext); });
   shared.afterAll((fixture: UserID): void => { expect(sharedCleanups).toEqual(2); });
   shared.runAndExit();
 

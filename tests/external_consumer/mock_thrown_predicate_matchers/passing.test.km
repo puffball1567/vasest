@@ -1,3 +1,4 @@
+import go os from "os";
 import { Suite, TestContext, MockFn, MockAction, MockOutcomeResult, MockOutcomeSource, MockOutcomeExpectation, expectMockOutcome, expectFunction, expect, skipTest } from "vasest";
 import go fmt from "fmt";
 import go errors from "errors";
@@ -5,7 +6,7 @@ import go errors from "errors";
 class DomainError implements error {
   public code: int;
   constructor(code: int) { this.code = code; }
-  public function Error(): string { throw errors.New("Error must not be called by matcher"); }
+  public function Error(): bstring { throw errors.New("Error must not be called by matcher"); }
 }
 
 class Spy implements MockOutcomeSource {
@@ -65,7 +66,7 @@ function main(): void {
     const mock = new MockAction<int>((value: int): void => { const missing: error = nil; throw missing; });
     expectFunction((): void => { mock.invoke(1); }).toThrow();
     expectMockOutcome(mock).toHaveThrownSatisfying((value: error): boolean => { return value == nil; });
-    const typedNil: DomainError = nil;
+    const typedNil: *os.PathError = nil;
     const expectedNil: error = typedNil;
     mock.implementOnce((value: int): void => { throw typedNil; });
     expectFunction((): void => { mock.invoke(2); }).toThrow();

@@ -2,20 +2,20 @@ import { Suite, TestContext, expectEqual, expectNoError, expectTrue } from "vase
 import go os from "os";
 
 struct Row {
-  name: string;
+  name: bstring;
   actual: int;
   expected: int;
 }
 
-function dataDirectory(context: TestContext): string {
+function dataDirectory(context: TestContext): bstring {
   return context.tempDir();
 }
 
 function main(): void {
   const suite = new Suite("context matrix");
   const [originalEnv, originallySet] = os.LookupEnv("VASEST_TABLE_FIXTURE");
-  let paths: string[] = [];
-  let activeName = "";
+  let paths: bstring[] = [];
+  let activeName: bstring = "";
   suite.beforeEach((): void => {
     const [value, existed] = os.LookupEnv("VASEST_TABLE_FIXTURE");
     expectEqual(value, originalEnv);
@@ -44,7 +44,7 @@ function main(): void {
     Row { name: "first passes", actual: 1, expected: 1 },
     Row { name: "middle fails", actual: 2, expected: 3 },
     Row { name: "last still runs", actual: 4, expected: 4 },
-  ], (row: Row): string => {
+  ], (row: Row): bstring => {
     return row.name;
   }, (row: Row, context: TestContext): void => {
     activeName = row.name;

@@ -22,10 +22,10 @@ function main(): void {
       expectSlice<int>(values).not.toSatisfyAllIndexed((value: int, index: int): boolean => { return value > 0; });
     }
   });
-  suite.test("nil any predicate", (): void => { expectSlice<int>(empty).toSatisfyAnyIndexed(nil); });
-  suite.test("negated nil any predicate", (): void => { expectSlice<int>(empty).not.toSatisfyAnyIndexed(nil); });
-  suite.test("nil all predicate", (): void => { expectSlice<int>(empty).toSatisfyAllIndexed(nil); });
-  suite.test("negated nil all predicate", (): void => { expectSlice<int>(empty).not.toSatisfyAllIndexed(nil); });
+  suite.test("nil any predicate", (): void => { expectSlice<int>(empty).toSatisfyAnyIndexed(null); });
+  suite.test("negated nil any predicate", (): void => { expectSlice<int>(empty).not.toSatisfyAnyIndexed(null); });
+  suite.test("nil all predicate", (): void => { expectSlice<int>(empty).toSatisfyAllIndexed(null); });
+  suite.test("negated nil all predicate", (): void => { expectSlice<int>(empty).not.toSatisfyAllIndexed(null); });
   suite.test("thrown predicate", (): void => {
     expectSlice<int>(values).not.toSatisfyAnyIndexed((value: int, index: int): boolean => { throw errors.New("predicate callback failed"); });
   });

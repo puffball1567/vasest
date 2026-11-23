@@ -3,7 +3,7 @@ import go math from "math";
 import go time from "time";
 
 type UserID = distinct int64;
-type Label = distinct string;
+type Label = distinct bstring;
 
 function main(): void {
   const suite = new Suite("typed ordered matchers");
@@ -60,8 +60,8 @@ function main(): void {
   suite.test("native string ordering with nominal types", (): void => {
     expectOrdered<Label>(Label("金木犀")).toBeGreaterThan(Label("木"));
     expectOrdered<Label>(Label("a\x00b")).toBeLessThan(Label("a\x00c"));
-    expectOrdered<string>("").toBeLessThanOrEqual("");
-    expectOrdered("a").not.toBeLessThan("a");
+    expectOrdered<bstring>("").toBeLessThanOrEqual("");
+    expectOrdered<bstring>("a").not.toBeLessThan("a");
   });
   suite.runAndExit();
 }
